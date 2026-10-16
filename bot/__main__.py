@@ -17,7 +17,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError, Telegra
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefault, User
 
-from . import admin, handlers, tag_editor
+from . import admin, handlers, manage, tag_editor
 from .alerts import Alerts
 from .config import Settings
 from .context import Ctx
@@ -36,10 +36,17 @@ USER_COMMANDS = [
     BotCommand(command="cancel", description="Cancel your downloads"),
 ]
 ADMIN_COMMANDS = [
-    BotCommand(command="stats", description="Today's stats"),
+    BotCommand(command="admin", description="Admin commands"),
+    BotCommand(command="stats", description="Usage statistics"),
+    BotCommand(command="users", description="Users and their usage"),
+    BotCommand(command="user", description="One user's details"),
+    BotCommand(command="jobs", description="Running and queued jobs"),
+    BotCommand(command="failures", description="Recent failures"),
+    BotCommand(command="uncache", description="Forget the cached file for a link"),
+    BotCommand(command="broadcast", description="Message all users"),
     BotCommand(command="selftest", description="Test every source through every egress"),
-    BotCommand(command="ban", description="Ban a user id"),
-    BotCommand(command="unban", description="Unban a user id"),
+    BotCommand(command="ban", description="Ban a user"),
+    BotCommand(command="unban", description="Unban a user"),
 ]
 API_WAIT = 120
 HOUSEKEEPING_INTERVAL = 30
@@ -153,7 +160,7 @@ async def main() -> None:
         dp.message.outer_middleware(access)
         dp.callback_query.outer_middleware(access)
         dp.errors.register(handlers.on_error)
-        dp.include_routers(admin.router, tag_editor.router, handlers.router)
+        dp.include_routers(admin.router, manage.router, tag_editor.router, handlers.router)
 
         ctx.spawn(housekeeping(ctx), name="housekeeping")
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types(), close_bot_session=False)

@@ -73,7 +73,7 @@ class AccessMiddleware(BaseMiddleware):
         if user is None or chat is None or chat.type != ChatType.PRIVATE:
             return None
         ctx: Ctx = data["ctx"]
-        if await ctx.db.touch_user(user.id, user.username):
+        if await ctx.db.touch_user(user.id, user.username, user.full_name):
             return None
         if not ctx.settings.is_allowed(user.id):
             if isinstance(event, Message):

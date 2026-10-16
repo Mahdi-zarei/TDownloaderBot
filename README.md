@@ -153,7 +153,9 @@ Talk to the bot in a private chat:
       caption links the YouTube upload it was matched to.
 - [ ] Send an already-delivered link again: it comes back instantly from cache (marked with the lightning icon).
 - [ ] `/selftest` (admin): pass/fail per source and egress.
-- [ ] `/stats` (admin): users, jobs, bytes, failures.
+- [ ] `/stats` (admin): users, jobs, bytes, failures; the period buttons switch between today, 7 days,
+      30 days and all time.
+- [ ] `/users`, then tap a `/u_<id>` link: the user's history, with Ban and Cancel buttons.
 - [ ] Start a long download and press **Cancel**: the job stops and its temp files are removed.
 
 ## Egress
@@ -202,9 +204,26 @@ that audio through YouTube's egress and concurrency limit, and tags it with Spot
 
 - `ALLOWED_USERS=` empty: anyone who finds the bot can use it (bot usernames show up in Telegram search).
 - `ALLOWED_USERS=11111111,22222222`: allowlist. `ADMIN_ID` is always allowed.
-- `/ban <user_id>` and `/unban <user_id>` (admin only) take effect immediately, no restart.
+- `/ban <id or @username>` and `/unban …` (admin only) take effect immediately, no restart.
 
 After editing `.env`: `docker compose up -d bot`.
+
+## Admin commands
+
+Only `ADMIN_ID` can use these; for anyone else they're ordinary messages. `/admin` lists them in the chat.
+
+| Command | What it does |
+| --- | --- |
+| `/stats [today\|7d\|30d\|all]` | Active/new users, requests by outcome and success rate, data sent, cache size, per-source numbers, top users, failure reasons, failures by egress. Buttons switch the period. |
+| `/users [recent\|jobs\|bytes]` | Everyone who used the bot, 15 per page: delivered and failed requests, data sent, last seen, banned flag. Buttons change the sort and page. |
+| `/user <id or @name>` | One user: first/last seen, requests by outcome, data, sources, live jobs, the last 10 requests with links. Buttons: Ban/Unban, Cancel their jobs, Refresh. Every list shows a tappable `/u_<id>` shortcut to this. |
+| `/jobs` | Running and queued jobs with stage and progress; a cancel button per job. |
+| `/failures [n]` | The last n failures (default 10, max 30) with source, egress, reason, user, link and the site's error line. |
+| `/uncache <link>` | Forgets every cached file for that link (all qualities), e.g. after a wrong Spotify match, so the next request downloads fresh. |
+| `/broadcast` | Reply to any message with `/broadcast` to send all non-banned users a copy (formatting and media kept), or `/broadcast <text>`. Shows the recipient count and waits for a Send button; reports delivered / blocked / failed at the end. |
+| `/selftest`, `/ban`, `/unban` | As above. |
+
+Times are UTC. Usage counts come from the job history in `state/bot.db`, so they survive restarts.
 
 ## Nightly yt-dlp refresh
 

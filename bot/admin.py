@@ -1,4 +1,4 @@
-"""Admin router: /stats, /selftest, /ban, /unban."""
+"""Admin router: /selftest, /ban, /unban. Statistics and user management live in manage.py."""
 
 from __future__ import annotations
 
@@ -10,28 +10,23 @@ import time
 
 from aiogram import Router
 from aiogram.filters import Command, CommandObject, Filter
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, Message
 
 from . import matching, pipeline, tag_editor
 from .config import Settings
 from .context import Ctx
-from .db import JobStatus
 from .downloader import SelftestResult
 from .models import DownloadError
 
 log = logging.getLogger(__name__)
 router = Router(name="admin")
 
-_STATUS_ORDER = (
-    JobStatus.DONE, JobStatus.CACHED, JobStatus.FAILED, JobStatus.TIMEOUT,
-    JobStatus.CANCELLED, JobStatus.RUNNING, JobStatus.QUEUED,
-)
 _selftest_lock = asyncio.Lock()
 
 
 class IsAdmin(Filter):
-    async def __call__(self, message: Message, ctx: Ctx) -> bool:
-        return message.from_user is not None and message.from_user.id == ctx.settings.admin_id
+    async def __call__(self, event: Message | CallbackQuery, ctx: Ctx) -> bool:
+        return event.from_user is not None and event.from_user.id == ctx.settings.admin_id
 
 
 router.message.filter(IsAdmin())
@@ -45,25 +40,9 @@ def fmt_bytes(n: float) -> str:
     return f"{n:.1f} TB"
 
 
-@router.message(Command("stats"))
-async def cmd_stats(message: Message, ctx: Ctx) -> None:
-    st = await ctx.db.stats_today()
-    jobs: dict[str, int] = st["jobs"]
-    statuses = [s for s in _STATUS_ORDER if jobs.get(s)] + [s for s in jobs if s not in _STATUS_ORDER]
-    lines = [
-        "📊 <b>Today</b> (UTC)",
-        f"Users: {st['users_today']} active · {st['users_new']} new · {st['users_total']} total",
-        "Jobs: " + (" · ".join(f"{html.escape(s)} {jobs[s]}" for s in statuses) or "none"),
-        f"Sent: {fmt_bytes(st['bytes'])}",
-        f"Now: {ctx.jobs.running_count} running · {ctx.jobs.queued_count} queued",
-        f"Cache hits since start: {sum(ctx.metrics.cache_hits.values())}",
-    ]
-    if st["failures"]:
-        lines.append("<b>Failures</b>")
-        lines += [
-            f"{html.escape(source)} · {html.escape(egress or 'direct')}: {n}" for source, egress, n in st["failures"]
-        ]
-    await message.answer("\n".join(lines))
+async def stop_user_work(ctx: Ctx, user_id: int) -> int:
+    """Cancels the user's jobs and closes their tag editors; returns how many were stopped."""
+    return await tag_editor.close_user(ctx, user_id) + ctx.jobs.cancel_user(user_id)
 
 
 # Selftest
@@ -164,31 +143,35 @@ async def _spotify_row(ctx: Ctx) -> str:
 # Bans
 
 
-def _parse_id(command: CommandObject) -> int | None:
+async def _resolve_user(ctx: Ctx, command: CommandObject) -> int | None:
+    """A numeric id as given (the user may not have used the bot yet), or a known @username."""
     arg = (command.args or "").strip()
-    return int(arg) if arg.lstrip("-").isdigit() else None
+    if arg.lstrip("-").isdigit():
+        return int(arg)
+    row = await ctx.db.find_user(arg) if arg else None
+    return row["tg_id"] if row else None
 
 
 @router.message(Command("ban"))
 async def cmd_ban(message: Message, command: CommandObject, ctx: Ctx) -> None:
-    user_id = _parse_id(command)
+    user_id = await _resolve_user(ctx, command)
     if user_id is None:
-        await message.reply("Usage: /ban &lt;user id&gt;")
+        await message.reply("Usage: /ban &lt;user id or @username&gt;")
         return
     if user_id == ctx.settings.admin_id:
         await message.reply("You can't ban yourself.")
         return
     await ctx.db.set_banned(user_id, True)
-    n = await tag_editor.close_user(ctx, user_id) + ctx.jobs.cancel_user(user_id)
+    n = await stop_user_work(ctx, user_id)
     suffix = f", cancelled {n} job{'s' if n != 1 else ''}" if n else ""
     await message.reply(f"🚫 Banned <code>{user_id}</code>{suffix}.")
 
 
 @router.message(Command("unban"))
 async def cmd_unban(message: Message, command: CommandObject, ctx: Ctx) -> None:
-    user_id = _parse_id(command)
+    user_id = await _resolve_user(ctx, command)
     if user_id is None:
-        await message.reply("Usage: /unban &lt;user id&gt;")
+        await message.reply("Usage: /unban &lt;user id or @username&gt;")
         return
     await ctx.db.set_banned(user_id, False)
     await message.reply(f"✅ Unbanned <code>{user_id}</code>.")
