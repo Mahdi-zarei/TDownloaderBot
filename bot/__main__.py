@@ -42,6 +42,7 @@ ADMIN_COMMANDS = [
     BotCommand(command="user", description="One user's details"),
     BotCommand(command="jobs", description="Running and queued jobs"),
     BotCommand(command="failures", description="Recent failures"),
+    BotCommand(command="link", description="The link of a failed request"),
     BotCommand(command="uncache", description="Forget the cached file for a link"),
     BotCommand(command="broadcast", description="Message all users"),
     BotCommand(command="selftest", description="Test every source through every egress"),

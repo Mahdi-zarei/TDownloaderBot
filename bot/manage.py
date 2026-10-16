@@ -20,6 +20,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from . import pipeline
 from .admin import IsAdmin, fmt_bytes, stop_user_work
+from .alerts import scrub
 from .context import Ctx
 from .db import USER_SORTS, JobStatus, day_start
 from .models import DownloadError
@@ -48,6 +49,8 @@ ADMIN_HELP = (
     "/user &lt;id or @name&gt; · one user's history, ban, cancel (or tap /u_&lt;id&gt; in lists)\n"
     "/jobs · running and queued jobs, cancel any of them\n"
     "/failures [n] · recent failures with the site's error\n"
+    "/link &lt;id&gt; · the link of a failed request (or tap /link_&lt;id&gt;); links of requests that "
+    "didn't fail are never kept\n"
     "/uncache &lt;link&gt; · forget the cached file for a link, so it downloads fresh\n"
     "/broadcast · reply to a message to send a copy to all users, or /broadcast &lt;text&gt;\n"
     "/ban, /unban &lt;id or @name&gt;\n"
@@ -106,11 +109,6 @@ def who(row: dict[str, Any] | None, uid: int) -> str:
     row = row or {}
     label = f"@{row['username']}" if row.get("username") else (row.get("name") or str(uid))
     return f'<a href="tg://user?id={uid}">{html.escape(pipeline.truncate(label, 32))}</a>'
-
-
-def short_link(url: str) -> str:
-    shown = re.sub(r"^https?://(www\.)?", "", url)
-    return pipeline.link(url, pipeline.truncate(shown, 48))
 
 
 def reason_of(error: str | None) -> str:
@@ -258,12 +256,16 @@ async def on_users(cb: CallbackQuery, callback_data: UsersCb, ctx: Ctx) -> None:
 
 
 def _job_line(j: dict[str, Any]) -> str:
+    """One request, never with its link: failed ones offer /link_<id> to reveal it on request."""
     parts = [f"{STATUS_ICON.get(j['status'], '•')} {when(j['created_at'])}", html.escape(f"{j['source']} {j['format']}".strip())]
     if j["bytes"]:
         parts.append(fmt_bytes(j["bytes"]))
-    if j["status"] in (JobStatus.FAILED, JobStatus.TIMEOUT) and (reason := reason_of(j["error"])):
-        parts.append(html.escape(reason))
-    return " · ".join(parts) + " · " + short_link(j["url"])
+    if j["status"] in (JobStatus.FAILED, JobStatus.TIMEOUT):
+        if reason := reason_of(j["error"]):
+            parts.append(html.escape(reason))
+        if j["url"]:
+            parts.append(f"/link_{j['id']}")
+    return " · ".join(parts)
 
 
 async def _user_view(ctx: Ctx, uid: int) -> tuple[str, InlineKeyboardMarkup] | None:
@@ -358,7 +360,7 @@ async def _jobs_view(ctx: Ctx) -> tuple[str, InlineKeyboardMarkup]:
             state += f" {p.fraction:.0%}"
         entries.append(
             f"#{j.id} {state} · {html.escape(f'{j.rule.name} {j.fmt}')} · {who(users.get(j.user_id), j.user_id)} "
-            f"/u_{j.user_id}\n    {short_link(j.ref.url)}"
+            f"/u_{j.user_id}"
         )
     fit(lines, entries or ["Nothing running."])
     cancels = [btn(f"✖ #{j.id}", JobsCb(a="cancel", id=j.id)) for j in jobs[:24]]
@@ -395,14 +397,46 @@ async def cmd_failures(message: Message, command: CommandObject, ctx: Ctx) -> No
     entries = []
     for r in rows:
         entry = (
-            f"{STATUS_ICON.get(r['status'], '❌')} {when(r['created_at'])} · {html.escape(r['source'])} · "
+            f"{STATUS_ICON.get(r['status'], '❌')} #{r['id']} {when(r['created_at'])} · {html.escape(r['source'])} · "
             f"{html.escape(r['egress'] or 'direct')} · <b>{html.escape(r['reason'] or '?')}</b> · "
-            f"{who(users.get(r['tg_id']), r['tg_id'])} /u_{r['tg_id']}\n    {short_link(r['url'])}"
+            f"{who(users.get(r['tg_id']), r['tg_id'])} /u_{r['tg_id']}" + (f" /link_{r['id']}" if r["url"] else "")
         )
-        if (line := error_line(r["error"])) and line != r["reason"]:
+        # Rows from before link-free errors may still carry links or ids, so mask them here too.
+        if (line := scrub(error_line(r["error"]))) and line != r["reason"]:
             entry += f"\n    <i>{html.escape(pipeline.truncate(line, 160))}</i>"
         entries.append(entry)
     await message.answer("\n".join(fit([f"❌ <b>Last {plural(len(rows), 'failure')}</b>"], entries)))
+
+
+# /link: the only place a user's link is ever shown, and only for a request that failed
+
+
+async def _reply_link(message: Message, ctx: Ctx, job_id: int) -> None:
+    row = await ctx.db.failed_job(job_id)
+    if row is None or not row["url"]:
+        await message.reply(f"No link for #{job_id}. Links are kept only for requests that failed.")
+        return
+    users = await ctx.db.users_by_ids([row["tg_id"]])
+    await message.reply(
+        f"🔗 #{row['id']} · {when(row['created_at'])} · {html.escape(row['source'] + ' ' + row['format'])} · "
+        f"<b>{html.escape(row['reason'] or '?')}</b> · {who(users.get(row['tg_id']), row['tg_id'])}\n"
+        f"{html.escape(row['url'])}"
+    )
+
+
+@router.message(Command("link"))
+async def cmd_link(message: Message, command: CommandObject, ctx: Ctx) -> None:
+    arg = (command.args or "").strip().lstrip("#")
+    if not arg.isdigit():
+        await message.reply("Usage: /link &lt;request id&gt; · shows the link of a failed request (see /failures)")
+        return
+    await _reply_link(message, ctx, int(arg))
+
+
+@router.message(Command(re.compile(r"link_(\d+)")))
+async def cmd_link_short(message: Message, command: CommandObject, ctx: Ctx) -> None:
+    assert command.regexp_match is not None
+    await _reply_link(message, ctx, int(command.regexp_match[1]))
 
 
 # /uncache

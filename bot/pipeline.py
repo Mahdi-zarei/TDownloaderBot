@@ -16,6 +16,7 @@ from aiogram.filters.callback_data import CallbackData
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, ReplyParameters
 
 from . import matching, spotify, tagging
+from .alerts import scrub
 from .context import Ctx
 from .db import JobStatus
 from .jobs import Job, QueueFull
@@ -231,12 +232,12 @@ async def send_from_cache(
     try:
         await ctx.delivery.send_cached(chat_id, sent, reply_to=reply_to)
     except TelegramBadRequest as e:
-        log.info("dropping stale cache entry %s: %s", key, e.message)
+        log.info("dropping a stale %s cache entry: %s", rule.name, e.message)
         await ctx.db.delete_cache(key)
         return False
     ctx.metrics.cache_hit(rule.name)
     egress = ctx.settings.egress_label(rule.egress)
-    job_id = await ctx.db.job_create(user_id, rule.name, ref.url, fmt, egress=egress, status=JobStatus.CACHED)
+    job_id = await ctx.db.job_create(user_id, rule.name, fmt, egress=egress, status=JobStatus.CACHED)
     await quiet(ctx.db.job_finish(job_id, JobStatus.CACHED))
     return True
 
@@ -266,7 +267,7 @@ async def enqueue(
 
     # Job.egress is for records and display only (DB, metrics, alerts); downloads use rule.egress.
     egress = ctx.settings.egress_label(rule.egress)
-    job_id = await ctx.db.job_create(user_id, rule.name, ref.url, fmt, egress=egress)
+    job_id = await ctx.db.job_create(user_id, rule.name, fmt, egress=egress)
     job = Job(
         id=job_id, user_id=user_id, chat_id=chat_id, rule=rule, ref=ref, fmt=fmt, egress=egress,
         data={"reply_to": reply_to, **(data or {})},
@@ -346,26 +347,50 @@ async def report_cancel(ctx: Ctx, job: Job) -> None:
     ctx.metrics.job_finished(job.rule.name, JobStatus.CANCELLED, egress=job.egress)
 
 
-async def report_failure(ctx: Ctx, job: Job, exc: Exception) -> None:
-    source = job.rule.name
+def classify_failure(source: str, exc: Exception, ref: MediaRef) -> tuple[str, str, str, str, bool]:
+    """(job status, stored error, metrics reason, alert kind, whether to alert) for a failure."""
     if isinstance(exc, DownloadError):
         status = JobStatus.TIMEOUT if exc.reason is Reason.TIMEOUT else JobStatus.FAILED
-        text = failure_text(exc)
         error = f"{exc.reason}: {exc.detail[-2000:]}" if exc.detail else str(exc.reason)
         reason, kind, alert = str(exc.reason), f"{source}:{exc.reason}", not exc.expected
     else:
-        status, text = JobStatus.FAILED, GENERIC_FAILURE
-        error = f"{type(exc).__name__}: {exc}"[-2000:]
+        status, error = JobStatus.FAILED, f"{type(exc).__name__}: {exc}"[-2000:]
         reason, kind, alert = str(Reason.FAILED), f"{source}:{type(exc).__name__}", True
-    await show(ctx, job, text)
-    await quiet(ctx.db.job_finish(job.id, status, error=error))
+    # The failed request's link is kept in its own column for /link; the error text stays link-free.
+    return status, scrub(error, [ref.media_id]), reason, kind, alert
+
+
+async def report_failure(ctx: Ctx, job: Job, exc: Exception) -> None:
+    source = job.rule.name
+    status, error, reason, kind, alert = classify_failure(source, exc, job.ref)
+    await show(ctx, job, failure_text(exc) if isinstance(exc, DownloadError) else GENERIC_FAILURE)
+    await quiet(ctx.db.job_finish(job.id, status, error=error, url=job.ref.url))
     ctx.metrics.job_finished(source, status, egress=job.egress, reason=reason)
     if alert:
         await ctx.alerts.error(
-            kind, f"Job failed ({status}, {job.fmt})", exc,
-            user=job.user_id, source=source, url=job.ref.url, job=job.id, egress=job.egress,
+            kind, f"Job failed ({status}, {job.fmt})", exc, private=[job.ref.media_id],
+            user=job.user_id, source=source, job=job.id, link=f"/link_{job.id}", egress=job.egress,
             cookies=job.rule.cookies_problem(),
         )
+
+
+async def record_failure(
+    ctx: Ctx, rule: SourceRule, ref: MediaRef, fmt: str, user_id: int, exc: Exception
+) -> tuple[int | None, bool]:
+    """Logs a failure that happened outside a job (reading formats) as a failed request.
+
+    Returns (job id, whether the admin should be alerted); the id is None if the row couldn't be written.
+    """
+    status, error, reason, _, alert = classify_failure(rule.name, exc, ref)
+    egress = ctx.settings.egress_label(rule.egress)
+    ctx.metrics.job_finished(rule.name, status, egress=egress, reason=reason)
+    try:
+        job_id = await ctx.db.job_create(user_id, rule.name, fmt, egress=egress, status=status)
+        await ctx.db.job_finish(job_id, status, error=error, url=ref.url)
+    except Exception:
+        log.exception("could not record a %s failure", rule.name)
+        return None, alert
+    return job_id, alert
 
 
 # Flows

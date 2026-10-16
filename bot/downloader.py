@@ -1009,7 +1009,7 @@ class Downloader:
             if not files:
                 raise self._error(run, meta_txt if guard else None)
             if run.code:
-                log.warning("yt-dlp exited %d with %d file(s) for %s", run.code, len(files), url)
+                log.warning("yt-dlp exited %d with %d file(s) for a %s download", run.code, len(files), rule.name)
             return files
 
         progress.set(Stage.DOWNLOADING)
@@ -1086,7 +1086,7 @@ class Downloader:
             try:
                 post = await fetch(rule, url, workdir, progress, egress=egress, deadline=deadline)
             except DownloadError as e:
-                log.info("%s via %s failed: %s", url, tool, e.reason)
+                log.info("%s post via %s failed: %s", rule.name, tool, e.reason)
                 errors.append((tool, e))
                 if e.reason is Reason.TIMEOUT:
                     break
@@ -1129,7 +1129,7 @@ class Downloader:
             if not items:
                 raise self._gallery_dl_error(run)
             if run.code:
-                log.warning("gallery-dl exited %d with %d item(s) for %s", run.code, len(items), url)
+                log.warning("gallery-dl exited %d with %d item(s) for a %s post", run.code, len(items), rule.name)
             meta = _first_json(folder)
             return _post_files(
                 rule, url, items, caption=meta.get("description"), uploader=meta.get("username"),

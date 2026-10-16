@@ -191,7 +191,7 @@ async def _handle_link(ctx: Ctx, message: Message, user_id: int, url: str, *, mu
     except TelegramForbiddenError:
         log.info("user %s blocked the bot", user_id)
     except Exception as e:
-        await ctx.alerts.error(f"link:{type(e).__name__}", "Link handling crashed", e, user=user_id, url=url)
+        await ctx.alerts.error(f"link:{type(e).__name__}", "Link handling crashed", e, user=user_id)
         try:
             await message.reply(pipeline.GENERIC_FAILURE)
         except Exception:
@@ -239,19 +239,18 @@ async def _open_picker(ctx: Ctx, message: Message, user_id: int, rule: SourceRul
             raise DownloadError(Reason.LIVE, ref.url)
         if probe.info.duration and probe.info.duration > ctx.settings.max_duration:
             raise DownloadError(Reason.TOO_LONG, f"{probe.info.duration:.0f}s")
-    except DownloadError as e:
-        await pipeline.edit_message(ctx.bot, chat_id, status.message_id, pipeline.failure_text(e))
-        if not e.expected:
+    except Exception as e:
+        known = e if isinstance(e, DownloadError) else None
+        text = pipeline.failure_text(known) if known else pipeline.GENERIC_FAILURE
+        await pipeline.edit_message(ctx.bot, chat_id, status.message_id, text)
+        job_id, alert = await pipeline.record_failure(ctx, rule, ref, "probe", user_id, e)
+        if alert:
             await ctx.alerts.error(
-                f"{rule.name}:{e.reason}", f"Probe failed ({e.reason})", e, user=user_id, source=rule.name, url=ref.url,
+                f"{rule.name}:{known.reason}" if known else f"{rule.name}:probe",
+                "Reading formats failed" if known else "Reading formats crashed", e, private=[ref.media_id],
+                user=user_id, source=rule.name, job=job_id, link=f"/link_{job_id}" if job_id else None,
                 cookies=rule.cookies_problem(),
             )
-        return
-    except Exception as e:
-        await pipeline.edit_message(ctx.bot, chat_id, status.message_id, pipeline.GENERIC_FAILURE)
-        await ctx.alerts.error(
-            f"{rule.name}:probe", "Probe crashed", e, user=user_id, source=rule.name, url=ref.url
-        )
         return
     if not probe.qualities and not probe.has_audio:
         await pipeline.edit_message(

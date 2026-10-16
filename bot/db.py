@@ -100,6 +100,8 @@ class DB:
             "WHERE status IN (?, ?)",
             (JobStatus.FAILED, _now(), JobStatus.QUEUED, JobStatus.RUNNING),
         )
+        # Privacy: links are kept only for failed requests (also clears rows written before that rule).
+        await conn.execute("UPDATE jobs SET url = '' WHERE url != '' AND status NOT IN (?, ?)", FAILED)
         await conn.commit()
         return cls(conn)
 
@@ -243,11 +245,12 @@ class DB:
 
     # jobs
 
-    async def job_create(self, tg_id: int, source: str, url: str, fmt: str, egress: str = "",
+    async def job_create(self, tg_id: int, source: str, fmt: str, egress: str = "",
                          status: str = JobStatus.QUEUED) -> int:
+        """A job row without its link: job_finish stores the link only when the request failed."""
         cur = await self.conn.execute(
-            "INSERT INTO jobs (tg_id, source, url, format, egress, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (tg_id, source, url, fmt, egress, status, _now()),
+            "INSERT INTO jobs (tg_id, source, url, format, egress, status, created_at) VALUES (?, ?, '', ?, ?, ?, ?)",
+            (tg_id, source, fmt, egress, status, _now()),
         )
         await self.conn.commit()
         assert cur.lastrowid is not None
@@ -259,12 +262,22 @@ class DB:
         )
         await self.conn.commit()
 
-    async def job_finish(self, job_id: int, status: str, *, error: str | None = None, nbytes: int = 0) -> None:
+    async def job_finish(
+        self, job_id: int, status: str, *, error: str | None = None, nbytes: int = 0, url: str = ""
+    ) -> None:
         await self.conn.execute(
-            "UPDATE jobs SET status = ?, error = ?, bytes = ?, finished_at = ? WHERE id = ?",
-            (status, error, nbytes, _now(), job_id),
+            "UPDATE jobs SET status = ?, error = ?, bytes = ?, finished_at = ?, url = ? WHERE id = ?",
+            (status, error, nbytes, _now(), url if status in FAILED else "", job_id),
         )
         await self.conn.commit()
+
+    async def failed_job(self, job_id: int) -> dict[str, Any] | None:
+        rows = await self._rows(
+            f"SELECT id, tg_id, source, url, format, egress, status, created_at, {_REASON_SQL} AS reason "
+            "FROM jobs WHERE id = ? AND status IN (?, ?)",
+            job_id, *FAILED,
+        )
+        return rows[0] if rows else None
 
     async def recent_failures(self, limit: int) -> list[dict[str, Any]]:
         return await self._rows(

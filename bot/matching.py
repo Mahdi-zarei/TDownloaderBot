@@ -107,7 +107,7 @@ async def _ytm_candidates(meta: TrackMeta, proxy: str | None) -> list[_Candidate
     try:
         results = await asyncio.wait_for(asyncio.to_thread(_ytm_search, f"{meta.artist} {meta.title}", proxy), YTM_TIMEOUT)
     except Exception as e:  # ytmusicapi breaks when YouTube Music changes; fall back quietly
-        log.warning("YouTube Music search failed for %r: %s", meta.title, e)
+        log.warning("YouTube Music search failed: %s", e)
         return []
     out = []
     for r in results:
@@ -138,11 +138,11 @@ async def find(settings: Settings, downloader: Downloader, rule: SourceRule, met
     ):
         candidates = await fetch()
         if match := pick(meta, candidates):
-            log.info("matched %r by %r to %s (%s, %.2f)", meta.title, meta.artist, match.url, match.via, match.score)
+            log.info("track matched via %s (score %.2f)", match.via, match.score)
             return match
         tried.append(f"{via}: {len(candidates)} result(s), none close enough")
     raise DownloadError(
         Reason.NO_MEDIA,
-        f"{meta.artist} - {meta.title} ({meta.duration}s): " + "; ".join(tried),
+        f"track of {meta.duration}s: " + "; ".join(tried),  # no title or artist: what users play stays private
         user_text="Couldn't find this track on YouTube Music.",
     )

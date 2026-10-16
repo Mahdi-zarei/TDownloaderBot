@@ -216,14 +216,25 @@ Only `ADMIN_ID` can use these; for anyone else they're ordinary messages. `/admi
 | --- | --- |
 | `/stats [today\|7d\|30d\|all]` | Active/new users, requests by outcome and success rate, data sent, cache size, per-source numbers, top users, failure reasons, failures by egress. Buttons switch the period. |
 | `/users [recent\|jobs\|bytes]` | Everyone who used the bot, 15 per page: delivered and failed requests, data sent, last seen, banned flag. Buttons change the sort and page. |
-| `/user <id or @name>` | One user: first/last seen, requests by outcome, data, sources, live jobs, the last 10 requests with links. Buttons: Ban/Unban, Cancel their jobs, Refresh. Every list shows a tappable `/u_<id>` shortcut to this. |
+| `/user <id or @name>` | One user: first/last seen, requests by outcome, data, sources, live jobs, the last 10 requests (no links). Buttons: Ban/Unban, Cancel their jobs, Refresh. Every list shows a tappable `/u_<id>` shortcut to this. |
 | `/jobs` | Running and queued jobs with stage and progress; a cancel button per job. |
-| `/failures [n]` | The last n failures (default 10, max 30) with source, egress, reason, user, link and the site's error line. |
+| `/failures [n]` | The last n failures (default 10, max 30) with source, egress, reason, user and the site's error line, with links and media ids masked. |
+| `/link <id>` | The link of one failed request, only when you ask (tap `/link_<id>` in `/failures`, `/user` or an alert). |
 | `/uncache <link>` | Forgets every cached file for that link (all qualities), e.g. after a wrong Spotify match, so the next request downloads fresh. |
 | `/broadcast` | Reply to any message with `/broadcast` to send all non-banned users a copy (formatting and media kept), or `/broadcast <text>`. Shows the recipient count and waits for a Send button; reports delivered / blocked / failed at the end. |
 | `/selftest`, `/ban`, `/unban` | As above. |
 
 Times are UTC. Usage counts come from the job history in `state/bot.db`, so they survive restarts.
+
+**Privacy.** The admin never sees what users download unless something failed and they ask for it:
+
+- A request's link is written to the database only when it fails; successful, cached and cancelled
+  requests keep no link (older rows are cleared on startup).
+- Admin views list requests without links. A failed one shows `/link_<id>`, and only that reveals its link.
+- Alerts and logs mask links, YouTube searches and media ids as `<link>`, `<search>` and `<id>`, and
+  Spotify matching logs no titles or artists.
+- Still stored, because the features need them: the `file_id` cache keyed by media id (that's how a
+  repeat request is answered instantly), and per-user counts by source and size.
 
 ## Nightly yt-dlp refresh
 

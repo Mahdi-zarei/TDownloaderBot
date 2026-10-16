@@ -103,5 +103,5 @@ async def fetch_cover(url: str, dest: Path) -> Path | None:
         await asyncio.to_thread(dest.write_bytes, data)
         return dest
     except (aiohttp.ClientError, TimeoutError, OSError) as e:
-        log.warning("cover download failed for %s: %s", url, e)
+        log.warning("cover download failed: %s", e)
         return None
