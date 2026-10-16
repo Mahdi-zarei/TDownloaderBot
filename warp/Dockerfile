@@ -16,7 +16,8 @@ RUN apk add --no-cache ca-certificates curl
 COPY --from=build /out/wgcf /out/wireproxy /usr/local/bin/
 COPY --chmod=755 entrypoint.sh /entrypoint.sh
 
+ENV SOCKS_ADDR=127.0.0.1:1080
 EXPOSE 1080
 HEALTHCHECK --interval=60s --timeout=20s --start-period=60s --retries=3 \
-  CMD curl -fsS -o /dev/null --max-time 15 --proxy socks5h://127.0.0.1:1080 https://www.cloudflare.com/cdn-cgi/trace || exit 1
+  CMD curl -fsS -o /dev/null --max-time 15 --proxy "socks5h://${SOCKS_ADDR}" https://www.cloudflare.com/cdn-cgi/trace || exit 1
 ENTRYPOINT ["/entrypoint.sh"]

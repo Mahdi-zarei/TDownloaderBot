@@ -1,5 +1,7 @@
 # NovaBot: Telegram media downloader.
-# One private bridge network; nothing is published except the bot's metrics on 127.0.0.1.
+# Every service shares the host's network stack (network_mode: host), so they reach each other on
+# 127.0.0.1 and every listener is bound to loopback only:
+#   8081 Bot API, 8082 Bot API stats (healthcheck), 1080 WARP SOCKS5, 1081 Windscribe SOCKS5, 9091 metrics.
 
 x-logging: &logging
   driver: json-file
@@ -10,6 +12,7 @@ x-logging: &logging
 services:
   bot:
     build: .
+    network_mode: host
     env_file: .env
     init: true
     restart: unless-stopped
@@ -19,18 +22,16 @@ services:
       - ./secrets:/secrets:ro
       # Same path as inside telegram-bot-api: in --local mode getFile returns absolute paths there.
       - ./tg-bot-api:/var/lib/telegram-bot-api:ro
-    ports:
-      - "127.0.0.1:9091:9090"   # Prometheus /metrics (METRICS_PORT inside the container)
     depends_on:
       telegram-bot-api:
         condition: service_healthy
       warp:
         condition: service_started
-    networks: [private]
     logging: *logging
 
   telegram-bot-api:
     build: ./telegram-bot-api
+    network_mode: host
     init: true
     restart: unless-stopped
     environment:
@@ -46,33 +47,31 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
-    networks: [private]
     logging: *logging
 
-  # Cloudflare WARP as SOCKS5: socks5h://warp:1080. Healthcheck is defined in warp/Dockerfile.
+  # Cloudflare WARP as SOCKS5 on socks5h://127.0.0.1:1080. Healthcheck is defined in warp/Dockerfile.
   warp:
     build: ./warp
+    network_mode: host
     init: true
     restart: unless-stopped
+    environment:
+      SOCKS_ADDR: 127.0.0.1:1080
     volumes:
       - ./warp-data:/var/lib/wgcf
-    networks: [private]
     logging: *logging
 
-  # Optional second egress from secrets/windscribe.conf: socks5h://windscribe:1080.
+  # Optional second egress from secrets/windscribe.conf on socks5h://127.0.0.1:1081.
   # Enable with `docker compose --profile windscribe up -d` (or COMPOSE_PROFILES=windscribe in .env).
   windscribe:
     build: ./warp
+    network_mode: host
     profiles: [windscribe]
     init: true
     restart: unless-stopped
     environment:
       WG_CONFIG: /secrets/windscribe.conf
+      SOCKS_ADDR: 127.0.0.1:1081
     volumes:
       - ./secrets:/secrets:ro
-    networks: [private]
     logging: *logging
-
-networks:
-  private:
-    driver: bridge

@@ -56,7 +56,7 @@ class Metrics:
         ]
         return "\n".join(out) + "\n"
 
-    async def serve(self, port: int, gauges: Callable[[], tuple[int, int]]) -> web.AppRunner:
+    async def serve(self, host: str, port: int, gauges: Callable[[], tuple[int, int]]) -> web.AppRunner:
         """Starts the /metrics server; `gauges` returns (running, queued). Caller cleans up the runner."""
 
         async def handle(_: web.Request) -> web.Response:
@@ -67,5 +67,5 @@ class Metrics:
         app.router.add_get("/metrics", handle)
         runner = web.AppRunner(app, access_log=None)
         await runner.setup()
-        await web.TCPSite(runner, "0.0.0.0", port).start()
+        await web.TCPSite(runner, host, port).start()
         return runner

@@ -4,14 +4,15 @@ Send the bot a YouTube, Instagram or SoundCloud link (or anything else yt-dlp su
 file back: video in the quality you pick, or audio with tags and cover. Repeat requests come from a
 `file_id` cache instantly.
 
-Three containers on one private Docker network, no public ports (the bot uses long polling):
+Three containers, all with `network_mode: host`. They talk over `127.0.0.1` and every listener is bound
+to loopback, so nothing is reachable from outside (the bot uses long polling). Keep these host ports free:
 
-| Service | What | Reachable as |
+| Service | What | Listens on (loopback) |
 | --- | --- | --- |
-| `bot` | Python 3.13 + aiogram 3, yt-dlp (+ yt-dlp-ejs, Deno), gallery-dl, ffmpeg | metrics on `127.0.0.1:9091` |
-| `telegram-bot-api` | Telegram's Bot API server in `--local` mode (uploads up to 2000 MB, by local path) | `http://telegram-bot-api:8081` |
-| `warp` | Cloudflare WARP via wgcf + wireproxy, as SOCKS5 (YouTube egress) | `socks5h://warp:1080` |
-| `windscribe` (optional profile) | Same image with a Windscribe WireGuard config | `socks5h://windscribe:1080` |
+| `bot` | Python 3.13 + aiogram 3, yt-dlp (+ yt-dlp-ejs, Deno), gallery-dl, ffmpeg | `127.0.0.1:9091` metrics |
+| `telegram-bot-api` | Telegram's Bot API server in `--local` mode (uploads up to 2000 MB, by local path) | `127.0.0.1:8081` API, `127.0.0.1:8082` stats |
+| `warp` | Cloudflare WARP via wgcf + wireproxy, as SOCKS5 (YouTube egress) | `socks5h://127.0.0.1:1080` |
+| `windscribe` (optional profile) | Same image with a Windscribe WireGuard config | `socks5h://127.0.0.1:1081` |
 
 ```text
 .
@@ -116,8 +117,12 @@ services:
     build: !reset null
     image: aiogram/telegram-bot-api:10.3
     environment:
-      TELEGRAM_LOCAL: "1"   # --local
-      TELEGRAM_STAT: "1"    # stats page on :8082, used by the healthcheck
+      TELEGRAM_LOCAL: "1"                      # --local
+      TELEGRAM_HTTP_IP_ADDRESS: "127.0.0.1"    # loopback only; host networking would expose 0.0.0.0
+    # No TELEGRAM_STAT: this image can't bind the stats page to loopback, so check the API port instead
+    # (any HTTP answer, even a 404, means the server is up).
+    healthcheck:
+      test: ["CMD-SHELL", "wget -S -O /dev/null http://127.0.0.1:8081/ 2>&1 | grep -q 'HTTP/'"]
 ```
 
 `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` already come from `.env` through `compose.yaml`.
@@ -169,7 +174,7 @@ EGRESS_YOUTUBE=socks5h://user:pass@host:port         # any proxy, e.g. residenti
    as `secrets/windscribe.conf`.
 2. In `.env`:
    ```sh
-   EGRESS_PROXIES=warp=socks5h://warp:1080,windscribe=socks5h://windscribe:1080
+   EGRESS_PROXIES=warp=socks5h://127.0.0.1:1080,windscribe=socks5h://127.0.0.1:1081
    COMPOSE_PROFILES=windscribe     # so every docker compose command includes it
    ```
 3. `docker compose --profile windscribe up -d`
@@ -180,7 +185,7 @@ to the winner and `docker compose up -d bot`.
 When VPN IPs get flagged ("Sign in to confirm you're not a bot" on every egress), point
 `EGRESS_YOUTUBE` at a residential proxy (`socks5h://user:pass@host:port` or `http://...`), or at a
 WireGuard peer you control: put its config in `secrets/` and add another service like `windscribe`
-with its own `WG_CONFIG`. Only the setting changes.
+with its own `WG_CONFIG` and a free loopback `SOCKS_ADDR` (e.g. `127.0.0.1:1082`). Only the setting changes.
 
 Optional for the egress containers: `WG_RESOLVE_STRATEGY=ipv4|ipv6|auto` (environment) picks the address
 family for proxied hostnames. WARP defaults to IPv6 because its profile has an IPv6 address.
@@ -188,7 +193,7 @@ family for proxied hostnames. WARP defaults to IPv6 because its profile has an I
 Check which IP an egress exits from:
 
 ```sh
-docker compose exec bot curl -s --proxy socks5h://warp:1080 https://www.cloudflare.com/cdn-cgi/trace
+curl -s --proxy socks5h://127.0.0.1:1080 https://www.cloudflare.com/cdn-cgi/trace   # straight from the host
 ```
 
 ## Access
@@ -243,8 +248,9 @@ scrape_configs:
       - targets: ["127.0.0.1:9091"]
 ```
 
-The port listens on loopback only. A scraper in another container needs host networking, or change the
-mapping in `compose.yaml` (for example to the Docker bridge IP `172.17.0.1:9091:9090`).
+The port listens on loopback only. A scraper in a container without host networking can't reach it;
+set `METRICS_HOST` to an address that scraper can reach (e.g. the Docker bridge IP `172.17.0.1`), never
+`0.0.0.0` on a public server.
 
 ## Troubleshooting
 
@@ -256,6 +262,7 @@ mapping in `compose.yaml` (for example to the Docker bridge IP `172.17.0.1:9091:
 | `telegram-bot-api` build dies with `Killed signal terminated program cc1plus` | Out of memory: `--build-arg JOBS=1`, add swap, or use the prebuilt image. |
 | `warp` stays unhealthy | `docker compose logs warp`. Re-register: `docker compose stop warp && sudo rm -rf warp-data/* && docker compose up -d warp`. |
 | `windscribe` restarts in a loop | `secrets/windscribe.conf` missing or not a WireGuard config. |
+| A service logs "address already in use" | Something else on the host holds 8081, 8082, 1080, 1081 or 9091 (`sudo ss -ltnp`); move it, or change `METRICS_PORT` / `SOCKS_ADDR` and the matching `EGRESS_PROXIES` entry. |
 | Bot waits forever at `up` | `telegram-bot-api` is not healthy: `docker compose logs telegram-bot-api`. |
 
 ## Data layout and backup

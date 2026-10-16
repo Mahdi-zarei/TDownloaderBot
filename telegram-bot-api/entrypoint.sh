@@ -17,9 +17,11 @@ if [ "$(stat -c %u "$WORK_DIR")" != "$(id -u "$RUN_AS")" ]; then
 fi
 chown "$RUN_AS:$RUN_AS" "$TEMP_DIR"
 
+# Loopback only: with host networking the default 0.0.0.0 would expose the API to the internet.
 # The statistics page on 127.0.0.1:8082 doubles as the container healthcheck.
 exec telegram-bot-api \
   --local \
+  --http-ip-address=127.0.0.1 \
   --http-port=8081 \
   --http-stat-port=8082 \
   --http-stat-ip-address=127.0.0.1 \

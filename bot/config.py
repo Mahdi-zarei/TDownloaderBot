@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     bot_token: str
-    bot_api_url: str = "http://telegram-bot-api:8081"
+    bot_api_url: str = "http://127.0.0.1:8081"
     admin_id: int
     # Comma-separated Telegram user ids; empty means anyone may use the bot.
     allowed_users: str = ""
@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     instagram_cookies: Path = Path("/secrets/instagram-cookies.txt")
 
     # Named egresses, "name=url,name=url". "direct" is always available.
-    egress_proxies: str = "warp=socks5h://warp:1080"
+    egress_proxies: str = "warp=socks5h://127.0.0.1:1080"
     # Per-source egress: "direct", a name from egress_proxies, or a proxy URL.
     egress_youtube: str = "warp"
     egress_instagram: str = "direct"
@@ -47,7 +47,8 @@ class Settings(BaseSettings):
     tag_editor_ttl: int = 15 * 60
     admin_alert_interval: int = 60
 
-    metrics_port: int = 9090
+    metrics_host: str = "127.0.0.1"
+    metrics_port: int = 9091
     log_level: str = "INFO"
 
     selftest_youtube: str = "https://www.youtube.com/watch?v=jNQXAC9IVRw"

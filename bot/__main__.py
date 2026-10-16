@@ -140,7 +140,9 @@ async def main() -> None:
             delivery=Delivery(bot, settings), metrics=metrics, alerts=Alerts(bot, settings),
         )
         if settings.metrics_port:
-            runner = await metrics.serve(settings.metrics_port, lambda: (jobs.running_count, jobs.queued_count))
+            runner = await metrics.serve(
+                settings.metrics_host, settings.metrics_port, lambda: (jobs.running_count, jobs.queued_count)
+            )
 
         dp = Dispatcher(storage=MemoryStorage())
         dp["ctx"] = ctx
