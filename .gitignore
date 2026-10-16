@@ -1,0 +1,11 @@
+.env
+data/
+state/
+tg-bot-api/
+warp-data/
+secrets/*
+!secrets/README.md
+__pycache__/
+*.py[cod]
+.venv/
+.idea/

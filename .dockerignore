@@ -1,0 +1,12 @@
+# Allowlist: the bot image needs only requirements.txt and bot/.
+# Everything else stays out of the build context: .env, secrets/, data/, state/,
+# tg-bot-api/, warp-data/, .git, .idea, docs, the other images' sources.
+*
+!requirements.txt
+!bot
+
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache

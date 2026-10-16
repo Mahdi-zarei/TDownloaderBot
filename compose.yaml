@@ -1,0 +1,78 @@
+# NovaBot: Telegram media downloader.
+# One private bridge network; nothing is published except the bot's metrics on 127.0.0.1.
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  bot:
+    build: .
+    env_file: .env
+    init: true
+    restart: unless-stopped
+    volumes:
+      - ./data:/data
+      - ./state:/state
+      - ./secrets:/secrets:ro
+      # Same path as inside telegram-bot-api: in --local mode getFile returns absolute paths there.
+      - ./tg-bot-api:/var/lib/telegram-bot-api:ro
+    ports:
+      - "127.0.0.1:9091:9090"   # Prometheus /metrics (METRICS_PORT inside the container)
+    depends_on:
+      telegram-bot-api:
+        condition: service_healthy
+      warp:
+        condition: service_started
+    networks: [private]
+    logging: *logging
+
+  telegram-bot-api:
+    build: ./telegram-bot-api
+    init: true
+    restart: unless-stopped
+    environment:
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID:?set TELEGRAM_API_ID in .env}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:?set TELEGRAM_API_HASH in .env}
+    volumes:
+      # /data must have the same absolute path as in bot: uploads go by local path.
+      - ./data:/data
+      - ./tg-bot-api:/var/lib/telegram-bot-api
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8082/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks: [private]
+    logging: *logging
+
+  # Cloudflare WARP as SOCKS5: socks5h://warp:1080. Healthcheck is defined in warp/Dockerfile.
+  warp:
+    build: ./warp
+    init: true
+    restart: unless-stopped
+    volumes:
+      - ./warp-data:/var/lib/wgcf
+    networks: [private]
+    logging: *logging
+
+  # Optional second egress from secrets/windscribe.conf: socks5h://windscribe:1080.
+  # Enable with `docker compose --profile windscribe up -d` (or COMPOSE_PROFILES=windscribe in .env).
+  windscribe:
+    build: ./warp
+    profiles: [windscribe]
+    init: true
+    restart: unless-stopped
+    environment:
+      WG_CONFIG: /secrets/windscribe.conf
+    volumes:
+      - ./secrets:/secrets:ro
+    networks: [private]
+    logging: *logging
+
+networks:
+  private:
+    driver: bridge
