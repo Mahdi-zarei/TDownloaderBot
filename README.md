@@ -276,5 +276,3 @@ docker compose exec bot python -c "import sqlite3; sqlite3.connect('/state/bot.d
 
 The cache holds Telegram `file_id`s, which belong to the bot token: with a new token from @BotFather
 the cache no longer works and fills again from scratch; users and bans carry over.
-#   n o v a b o t  
- 
