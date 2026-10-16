@@ -40,10 +40,10 @@ class Reason(StrEnum):
 
 USER_TEXT: dict[Reason, str] = {
     Reason.UNSUPPORTED: "This link isn't supported.",
-    Reason.PLAYLIST: "Playlists, sets, profiles and channels aren't supported. Send a single item.",
+    Reason.PLAYLIST: "Playlists, albums, sets, profiles and channels aren't supported. Send a single item.",
     Reason.PRIVATE: "This media is private.",
     Reason.UNAVAILABLE: "This media is unavailable (removed or region-locked).",
-    Reason.LOGIN_REQUIRED: "This media needs a login (age-restricted or members-only).",
+    Reason.LOGIN_REQUIRED: "This media needs a signed-in account (age-restricted, members-only, or the site blocked guests).",
     Reason.BLOCKED: "The site blocked the download. Try again later.",
     Reason.TOO_LARGE: "The file is larger than Telegram's 2 GB limit.",
     Reason.TOO_LONG: "This is longer than the allowed maximum length.",
@@ -162,6 +162,20 @@ class PostFiles:
     items: list[MediaItem]  # in post order
     info: MediaInfo  # uploader = author, title = short title
     caption: str = ""  # post text, plain
+
+
+@dataclass(slots=True)
+class TrackMeta:
+    """A track known by its metadata only (Spotify); the audio is matched elsewhere."""
+
+    id: str
+    url: str
+    title: str
+    artist: str  # display form, e.g. "The Weeknd, Ariana Grande"
+    album: str = ""
+    year: str = ""
+    duration: float | None = None
+    cover_url: str | None = None
 
 
 @dataclass(slots=True)

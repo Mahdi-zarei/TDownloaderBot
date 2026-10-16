@@ -4,20 +4,23 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Callable
+import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+from . import spotify
 from .config import Settings
-from .models import DownloadError, MediaRef, Reason
+from .models import DownloadError, MediaRef, Reason, TrackMeta
 
 
 class Mode(StrEnum):
     PICK = "pick"  # probe formats, offer video qualities plus audio
     AUDIO = "audio"  # straight to audio with default tags
     POST = "post"  # every item in the post, photos and videos
+    MATCH = "match"  # metadata from this source, audio matched on another (SourceRule.match_via)
 
 
 class CookiesPolicy(StrEnum):
@@ -40,13 +43,46 @@ class SourceRule:
     parse: Callable[[str], MediaRef | None]
     cookies: Path | None = None
     cookies_policy: CookiesPolicy = CookiesPolicy.NEVER
+    # Any of these cookies in the file means a logged-in session.
+    session_cookies: tuple[str, ...] = ()
     max_concurrent: int | None = None
     sleep_requests: float | None = None
     # Tools to try in order for a POST url; the first that yields media wins.
     post_tools: Callable[[str], tuple[Tool, ...]] | None = None
+    # MATCH mode: reads the track's metadata, and names the rule whose download path fetches the audio.
+    fetch_meta: Callable[[str], Awaitable[TrackMeta]] | None = None
+    match_via: str | None = None
+    # Shares another rule's concurrency limit (jobs that really download from that site).
+    limit_group: str | None = None
 
     def cookies_file(self) -> Path | None:
         return self.cookies if self.cookies and self.cookies.is_file() else None
+
+    def cookies_problem(self) -> str | None:
+        """Why the cookies file can't provide a logged-in session; None when it looks usable."""
+        if self.cookies_policy is CookiesPolicy.NEVER or self.cookies is None:
+            return None
+        if not self.cookies.is_file():
+            return f"no cookies file at {self.cookies}"
+        if not self.session_cookies:
+            return None
+        try:
+            lines = self.cookies.read_text("utf-8", errors="replace").splitlines()
+        except OSError as e:
+            return f"can't read {self.cookies}: {e.strerror}"
+        # Netscape rows: domain, subdomains, path, secure, expiry, name, value. HttpOnly rows start
+        # with "#HttpOnly_", so they look like comments but are real cookies.
+        expiries = [
+            int(f[4]) if f[4].isdigit() else 0
+            for f in (line.split("\t") for line in lines)
+            if len(f) == 7 and f[5] in self.session_cookies
+        ]
+        names = " / ".join(self.session_cookies)
+        if not expiries:
+            return f"{self.cookies.name} has no {names} cookie: the account isn't logged in"
+        if all(0 < e < time.time() for e in expiries):
+            return f"the {names} cookie in {self.cookies.name} has expired: export fresh cookies"
+        return None
 
 
 def _split(url: str):
@@ -133,6 +169,30 @@ def _soundcloud(url: str) -> MediaRef | None:
     return MediaRef("soundcloud", path_str.lower(), f"https://soundcloud.com/{path_str}")
 
 
+_SP_HOSTS = {"open.spotify.com", "play.spotify.com"}
+_SP_ID = re.compile(r"[0-9A-Za-z]{22}")
+_SP_COLLECTIONS = {"album", "playlist", "artist", "user", "collection"}
+
+
+def _spotify(url: str) -> MediaRef | None:
+    _, host, segs = _split(url)
+    if host in ("spotify.link", "spotify.app.link"):
+        if not segs:
+            raise DownloadError(Reason.UNSUPPORTED, url)
+        return MediaRef("spotify", f"link-{segs[0]}", url)  # resolved to the track page when fetched
+    if host not in _SP_HOSTS:
+        return None
+    if segs and segs[0].startswith("intl-"):
+        segs = segs[1:]
+    if len(segs) >= 2 and segs[0] == "track" and _SP_ID.fullmatch(segs[1]):
+        return MediaRef("spotify", segs[1], f"https://open.spotify.com/track/{segs[1]}")
+    if segs and segs[0] in _SP_COLLECTIONS:
+        raise DownloadError(Reason.PLAYLIST, url)
+    raise DownloadError(
+        Reason.UNSUPPORTED, url, user_text="Only Spotify tracks are supported (no podcasts, albums or playlists)."
+    )
+
+
 def _generic(url: str) -> MediaRef | None:
     parts, host, _ = _split(url)
     if parts.scheme not in ("http", "https") or not host:
@@ -151,6 +211,7 @@ def build_rules(s: Settings) -> list[SourceRule]:
             parse=_youtube,
             cookies=s.youtube_cookies,
             cookies_policy=CookiesPolicy.ON_AUTH_ERROR,
+            session_cookies=("SAPISID", "__Secure-3PAPISID"),
             max_concurrent=s.youtube_concurrency,
             sleep_requests=s.youtube_sleep_requests,
         ),
@@ -162,6 +223,7 @@ def build_rules(s: Settings) -> list[SourceRule]:
             parse=_instagram,
             cookies=s.instagram_cookies,
             cookies_policy=CookiesPolicy.ALWAYS,
+            session_cookies=("sessionid",),
             post_tools=_instagram_tools,
         ),
         SourceRule(
@@ -170,6 +232,17 @@ def build_rules(s: Settings) -> list[SourceRule]:
             mode=Mode.AUDIO,
             egress=s.egress_soundcloud,
             parse=_soundcloud,
+        ),
+        SourceRule(
+            name="spotify",
+            label="Spotify",
+            mode=Mode.MATCH,
+            # The audio comes from YouTube, so the job runs on YouTube's egress and concurrency limit.
+            egress=s.egress_youtube,
+            parse=_spotify,
+            fetch_meta=spotify.fetch_track,
+            match_via="youtube",
+            limit_group="youtube",
         ),
         SourceRule(
             name="generic",

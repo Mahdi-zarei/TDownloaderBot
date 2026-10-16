@@ -12,10 +12,11 @@ from aiogram import Router
 from aiogram.filters import Command, CommandObject, Filter
 from aiogram.types import Message
 
-from . import pipeline, tag_editor
+from . import matching, pipeline, tag_editor
 from .context import Ctx
 from .db import JobStatus
 from .downloader import SelftestResult
+from .models import DownloadError
 
 log = logging.getLogger(__name__)
 router = Router(name="admin")
@@ -88,6 +89,10 @@ async def _selftest_header(ctx: Ctx, egresses: list[str]) -> str:
     for egress, ip in zip(egresses, ips):
         shown = html.escape(ip) if isinstance(ip, str) else f"error ({html.escape(type(ip).__name__)})"
         lines.append(f"{html.escape(egress)}: <code>{shown}</code>")
+    for rule in ctx.sources.rules:
+        if rule.cookies is not None:
+            problem = rule.cookies_problem()
+            lines.append(f"cookies {html.escape(rule.name)}: " + (f"❌ {html.escape(problem)}" if problem else "✅"))
     return "\n".join(lines)
 
 
@@ -131,7 +136,25 @@ async def _selftest(ctx: Ctx, message: Message) -> None:
             await pipeline.edit_message(ctx.bot, status.chat.id, status.message_id, render(), retry=False)
     finally:
         shutil.rmtree(base, ignore_errors=True)
+    rows[("spotify", "match")] = await _spotify_row(ctx)
     await pipeline.edit_message(ctx.bot, status.chat.id, status.message_id, render())
+
+
+async def _spotify_row(ctx: Ctx) -> str:
+    """Metadata plus matching only: the download itself is the youtube row above."""
+    rule = ctx.sources.get("spotify")
+    assert rule.fetch_meta is not None and rule.match_via is not None
+    started = time.monotonic()
+    try:
+        meta = await rule.fetch_meta(ctx.settings.selftest_spotify)
+        match = await matching.find(ctx.settings, ctx.downloader, ctx.sources.get(rule.match_via), meta)
+    except DownloadError as e:
+        return f"❌ spotify · match · {html.escape(e.reason)}"
+    except Exception:
+        log.exception("selftest spotify match crashed")
+        return "❌ spotify · match · error"
+    found = html.escape(pipeline.truncate(f"{match.title} — {match.channel}", 60))
+    return f"✅ spotify · match via {html.escape(match.via)} · {time.monotonic() - started:.1f}s\n    {found}"
 
 
 # Bans

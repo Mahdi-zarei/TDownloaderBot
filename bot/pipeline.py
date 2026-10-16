@@ -15,11 +15,11 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, Teleg
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, ReplyParameters
 
-from . import tagging
+from . import matching, spotify, tagging
 from .context import Ctx
 from .db import JobStatus
 from .jobs import Job, QueueFull
-from .models import DownloadError, MediaInfo, MediaRef, PostFiles, Progress, Quality, Reason, Sent, Stage
+from .models import DownloadError, MediaInfo, MediaRef, PostFiles, Progress, Quality, Reason, Sent, Stage, Tags
 from .sources import SourceRule
 
 log = logging.getLogger(__name__)
@@ -346,6 +346,7 @@ async def report_failure(ctx: Ctx, job: Job, exc: Exception) -> None:
         await ctx.alerts.error(
             kind, f"Job failed ({status}, {job.fmt})", exc,
             user=job.user_id, source=source, url=job.ref.url, job=job.id, egress=job.egress,
+            cookies=job.rule.cookies_problem(),
         )
 
 
@@ -378,6 +379,30 @@ async def audio_flow(ctx: Ctx, job: Job, workdir: Path) -> Sent:
         job.chat_id, prepared, caption=audio_caption(job.rule, audio.info, job.ref.url),
         reply_to=job.data.get("reply_to"),
     )
+    await _cache(ctx, job, sent)
+    return sent
+
+
+async def match_flow(ctx: Ctx, job: Job, workdir: Path) -> Sent:
+    """MATCH mode (Spotify): the source's metadata and cover, the audio of the best YouTube match."""
+    rule = job.rule
+    assert rule.fetch_meta is not None and rule.match_via is not None
+    via = ctx.sources.get(rule.match_via)
+    job.progress.set(Stage.STARTING, detail=f"Reading the {rule.label} track…")
+    meta = await rule.fetch_meta(job.ref.url)
+    if meta.duration and meta.duration > ctx.settings.max_duration:
+        raise DownloadError(Reason.TOO_LONG, f"{meta.duration:.0f}s")
+    job.progress.set(Stage.STARTING, detail="Finding it on YouTube Music…")
+    match = await matching.find(ctx.settings, ctx.downloader, via, meta)
+    audio = await ctx.downloader.download_audio(via, match.url, workdir, job.progress)
+    job.progress.set(Stage.PROCESSING)
+    workdir.mkdir(parents=True, exist_ok=True)
+    cover = await spotify.fetch_cover(meta.cover_url, workdir / "source-cover.jpg") if meta.cover_url else None
+    tags = Tags(title=meta.title, artist=meta.artist, album=meta.album, year=meta.year)
+    prepared = await tagging.prepare_audio(audio, tags, fmt=None, cover_src=cover or audio.thumb, crop=True)
+    job.progress.set(Stage.UPLOADING)
+    caption = f"{link(meta.url or job.ref.url, rule.label)} · {link(match.url, match.via)}"
+    sent = await ctx.delivery.send_audio(job.chat_id, prepared, caption=caption, reply_to=job.data.get("reply_to"))
     await _cache(ctx, job, sent)
     return sent
 

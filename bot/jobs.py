@@ -88,7 +88,7 @@ class JobManager:
         user_sem = self._user_sems.setdefault(job.user_id, asyncio.Semaphore(self._user_running))
         async with AsyncExitStack() as stack:
             await stack.enter_async_context(user_sem)
-            if source_sem := self._source_sems.get(job.rule.name):
+            if source_sem := self._source_sems.get(job.rule.limit_group or job.rule.name):
                 await stack.enter_async_context(source_sem)
             await stack.enter_async_context(self._global)
             job.running = True

@@ -23,9 +23,10 @@ RUN pip install -r requirements.txt
 
 # The nightly rebuild passes a new YTDLP_REFRESH value, which invalidates the cache from here on:
 # only this layer and the code copy below are rebuilt. yt-dlp[default] pins its matching yt-dlp-ejs.
+# ytmusicapi (Spotify track matching) tracks YouTube Music changes, so it refreshes here too.
 ARG YTDLP_REFRESH=0
 RUN echo "yt-dlp refresh: ${YTDLP_REFRESH}" \
- && pip install -U "yt-dlp[default]" gallery-dl \
+ && pip install -U "yt-dlp[default]" gallery-dl ytmusicapi \
  && pip show yt-dlp-ejs >/dev/null \
  && yt-dlp --version && deno --version && gallery-dl --version && ffmpeg -version
 

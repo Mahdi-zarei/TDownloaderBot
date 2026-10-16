@@ -128,6 +128,9 @@ async def main() -> None:
         await set_commands(bot, settings)
 
         sources = Sources(settings)
+        for rule in sources.rules:
+            if problem := rule.cookies_problem():
+                log.warning("%s cookies: %s", rule.name, problem)
         jobs = JobManager(
             global_limit=settings.global_downloads,
             user_running=settings.user_running,

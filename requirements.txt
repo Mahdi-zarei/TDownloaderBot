@@ -4,5 +4,5 @@ aiosqlite>=0.20
 mutagen>=1.47
 Pillow>=11
 PySocks>=1.7
-# yt-dlp[default] (with yt-dlp-ejs) and gallery-dl are installed unpinned in the
+# yt-dlp[default] (with yt-dlp-ejs), gallery-dl and ytmusicapi are installed unpinned in the
 # Dockerfile so the nightly rebuild always picks up the latest releases.

@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     selftest_youtube: str = "https://www.youtube.com/watch?v=jNQXAC9IVRw"
     selftest_instagram: str = "https://www.instagram.com/p/aye83DjauH/"
     selftest_soundcloud: str = "https://soundcloud.com/forss/flickermood"
+    selftest_spotify: str = "https://open.spotify.com/track/4PTG3Z6ehGkBFwjybzWkR8"
 
     @cached_property
     def allowed_user_ids(self) -> frozenset[int]:

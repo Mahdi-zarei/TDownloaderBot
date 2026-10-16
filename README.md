@@ -1,8 +1,8 @@
 # NovaBot: Telegram media downloader
 
-Send the bot a YouTube, Instagram or SoundCloud link (or anything else yt-dlp supports) and it sends the
-file back: video in the quality you pick, or audio with tags and cover. Repeat requests come from a
-`file_id` cache instantly.
+Send the bot a YouTube, Instagram, SoundCloud or Spotify track link (or anything else yt-dlp supports) and
+it sends the file back: video in the quality you pick, or audio with tags and cover. Repeat requests come
+from a `file_id` cache instantly.
 
 Three containers, all with `network_mode: host`. They talk over `127.0.0.1` and every listener is bound
 to loopback, so nothing is reachable from outside (the bot uses long polling). Keep these host ports free:
@@ -150,6 +150,8 @@ Talk to the bot in a private chat:
       **Done**: the file carries your tags and cover.
 - [ ] Instagram reel, single-photo post, and a carousel (arrives as an album).
 - [ ] A SoundCloud track arrives as audio directly.
+- [ ] A Spotify track link arrives as audio tagged with Spotify's title, artist, album and cover; the
+      caption links the YouTube upload it was matched to.
 - [ ] Send an already-delivered link again: it comes back instantly from cache (marked with the lightning icon).
 - [ ] `/selftest` (admin): pass/fail per source and egress.
 - [ ] `/stats` (admin): users, jobs, bytes, failures.
@@ -195,6 +197,21 @@ Check which IP an egress exits from:
 ```sh
 curl -s --proxy socks5h://127.0.0.1:1080 https://www.cloudflare.com/cdn-cgi/trace   # straight from the host
 ```
+
+## Spotify
+
+Spotify audio is DRM-protected, so the bot doesn't download from Spotify. It reads the track's title,
+artists, album, year, duration and cover from the public track page (no API key), finds the same song on
+YouTube Music (official "Topic" album audio when available, otherwise a regular YouTube search), downloads
+that audio through YouTube's egress and concurrency limit, and tags it with Spotify's metadata and cover.
+
+- Single tracks only: albums, playlists, artists and podcasts get a one-line reply.
+- Audio quality is YouTube's (AAC ~128 kbps), not Spotify's.
+- Matches must agree on duration (within a few seconds) and title; live, cover, remix and similar uploads
+  are penalized unless the Spotify title says so. The caption links the matched upload so a wrong match
+  is easy to spot.
+- `/selftest` ends with a `spotify · match` row showing which search found `SELFTEST_SPOTIFY`: "YouTube
+  Music" is the good case; "YouTube" means the YouTube Music search came back empty from the server.
 
 ## Access
 

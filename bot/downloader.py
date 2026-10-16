@@ -711,6 +711,19 @@ class Downloader:
     async def download_post(self, rule: SourceRule, url: str, workdir: Path, progress: Progress) -> PostFiles:
         return await self._download_post(rule, url, workdir, progress, rule.egress, _deadline(self.settings.job_timeout))
 
+    async def search(self, rule: SourceRule, query: str, limit: int = 10) -> list[dict[str, Any]]:
+        """YouTube search results (flat entries: id, title, duration, channel) via the rule's egress."""
+        proxy = self._proxy(rule.egress)
+        args = ["--flat-playlist", "-J", "--playlist-items", f"1:{limit}"]
+        cmd = self._ytdlp_cmd(rule, proxy, None, args, f"ytsearch{limit}:{query}", playlist=True)
+        async with self._probe_sem:
+            with tempfile.TemporaryDirectory(prefix="search-") as tmp:
+                run = await _exec(cmd, timeout=self.settings.probe_timeout, keep_stdout=True, cwd=Path(tmp))
+        for line in reversed(run.stdout):
+            if line.startswith("{") and (data := _parse_json(line)):
+                return [e for e in data.get("entries") or [] if isinstance(e, dict) and e.get("id")]
+        raise self._error(run)
+
     async def selftest(self, rule: SourceRule, url: str, egress: str, workdir: Path) -> SelftestResult:
         started = time.monotonic()
 
