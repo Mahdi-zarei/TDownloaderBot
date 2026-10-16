@@ -13,6 +13,7 @@ from aiogram.filters import Command, CommandObject, Filter
 from aiogram.types import Message
 
 from . import matching, pipeline, tag_editor
+from .config import Settings
 from .context import Ctx
 from .db import JobStatus
 from .downloader import SelftestResult
@@ -69,7 +70,7 @@ async def cmd_stats(message: Message, ctx: Ctx) -> None:
 
 
 def _row(source: str, egress: str, result: SelftestResult | None) -> str:
-    name = f"{html.escape(source)} · {html.escape(egress)}"
+    name = f"{html.escape(source)} · {html.escape(Settings.egress_label(egress))}"
     if result is None:
         return f"❌ {name} · error"
     if result.ok:
@@ -88,7 +89,7 @@ async def _selftest_header(ctx: Ctx, egresses: list[str]) -> str:
     ips = await asyncio.gather(*(ctx.downloader.egress_ip(e) for e in egresses), return_exceptions=True)
     for egress, ip in zip(egresses, ips):
         shown = html.escape(ip) if isinstance(ip, str) else f"error ({html.escape(type(ip).__name__)})"
-        lines.append(f"{html.escape(egress)}: <code>{shown}</code>")
+        lines.append(f"{html.escape(Settings.egress_label(egress))}: <code>{shown}</code>")
     for rule in ctx.sources.rules:
         if rule.cookies is not None:
             problem = rule.cookies_problem()
@@ -110,7 +111,9 @@ async def _selftest(ctx: Ctx, message: Message) -> None:
     status = await message.reply("🧪 Selftest: starting…")
     egresses = s.egress_names
     targets = [("youtube", s.selftest_youtube), ("instagram", s.selftest_instagram), ("soundcloud", s.selftest_soundcloud)]
-    rows = {(src, eg): f"⏳ {html.escape(src)} · {html.escape(eg)}" for src, _ in targets for eg in egresses}
+    rows = {
+        (src, eg): f"⏳ {html.escape(src)} · {html.escape(s.egress_label(eg))}" for src, _ in targets for eg in egresses
+    }
     header = await _selftest_header(ctx, egresses)
 
     def render() -> str:
@@ -124,9 +127,10 @@ async def _selftest(ctx: Ctx, message: Message) -> None:
         async with limit:
             try:
                 rule = ctx.sources.get(source)
-                return source, egress, await ctx.downloader.selftest(rule, url, egress, base / f"{source}-{egress}")
+                workdir = base / f"{source}-{egresses.index(egress)}"  # egress may be a URL, not a file name
+                return source, egress, await ctx.downloader.selftest(rule, url, egress, workdir)
             except Exception:
-                log.exception("selftest %s via %s crashed", source, egress)
+                log.exception("selftest %s via %s crashed", source, s.egress_label(egress))
                 return source, egress, None
 
     try:

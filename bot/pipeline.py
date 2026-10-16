@@ -220,7 +220,8 @@ async def send_from_cache(
         await ctx.db.delete_cache(key)
         return False
     ctx.metrics.cache_hit(rule.name)
-    job_id = await ctx.db.job_create(user_id, rule.name, ref.url, fmt, egress=rule.egress, status=JobStatus.CACHED)
+    egress = ctx.settings.egress_label(rule.egress)
+    job_id = await ctx.db.job_create(user_id, rule.name, ref.url, fmt, egress=egress, status=JobStatus.CACHED)
     await quiet(ctx.db.job_finish(job_id, JobStatus.CACHED))
     return True
 
@@ -248,9 +249,11 @@ async def enqueue(
             await edit_message(ctx.bot, chat_id, status_message_id, text)
         return None
 
-    job_id = await ctx.db.job_create(user_id, rule.name, ref.url, fmt, egress=rule.egress)
+    # Job.egress is for records and display only (DB, metrics, alerts); downloads use rule.egress.
+    egress = ctx.settings.egress_label(rule.egress)
+    job_id = await ctx.db.job_create(user_id, rule.name, ref.url, fmt, egress=egress)
     job = Job(
-        id=job_id, user_id=user_id, chat_id=chat_id, rule=rule, ref=ref, fmt=fmt, egress=rule.egress,
+        id=job_id, user_id=user_id, chat_id=chat_id, rule=rule, ref=ref, fmt=fmt, egress=egress,
         data={"reply_to": reply_to, **(data or {})},
     )
     render = view or status_view(ctx)

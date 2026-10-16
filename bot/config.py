@@ -1,6 +1,8 @@
+import re
 from functools import cached_property
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 MB = 1024 * 1024
@@ -20,10 +22,8 @@ class Settings(BaseSettings):
     youtube_cookies: Path = Path("/secrets/youtube-cookies.txt")
     instagram_cookies: Path = Path("/secrets/instagram-cookies.txt")
 
-    # Named egresses, "name=url,name=url". "direct" is always available.
-    egress_proxies: str = "warp=socks5h://127.0.0.1:1080"
-    # Per-source egress: "direct", a name from egress_proxies, or a proxy URL.
-    egress_youtube: str = "warp"
+    # Per-source egress: "direct", or the URL of a proxy you run (socks5h://, socks5://, http://).
+    egress_youtube: str = "direct"
     egress_instagram: str = "direct"
     egress_soundcloud: str = "direct"
     egress_generic: str = "direct"
@@ -60,29 +60,33 @@ class Settings(BaseSettings):
     def allowed_user_ids(self) -> frozenset[int]:
         return frozenset(int(x) for x in self.allowed_users.replace(" ", "").split(",") if x)
 
-    @cached_property
-    def proxies(self) -> dict[str, str]:
-        out: dict[str, str] = {}
-        for pair in self.egress_proxies.split(","):
-            name, sep, url = pair.strip().partition("=")
-            if sep and name.strip() and url.strip():
-                out[name.strip()] = url.strip()
-        return out
+    @field_validator("egress_youtube", "egress_instagram", "egress_soundcloud", "egress_generic")
+    @classmethod
+    def _check_egress(cls, v: str) -> str:
+        v = v.strip()
+        if v and v != "direct" and "://" not in v:
+            raise ValueError(f"must be 'direct' or a proxy URL such as socks5h://127.0.0.1:1080, got {v!r}")
+        return v or "direct"
 
     @property
     def egress_names(self) -> list[str]:
-        return ["direct", *self.proxies]
+        """What /selftest compares: direct plus every distinct proxy a source is set to."""
+        used = (self.egress_youtube, self.egress_instagram, self.egress_soundcloud, self.egress_generic)
+        return list(dict.fromkeys(["direct", *(e.strip() for e in used if self.resolve_egress(e))]))
 
     def resolve_egress(self, egress: str) -> str | None:
         """Proxy URL for an egress setting; None means direct."""
         egress = egress.strip()
         if not egress or egress == "direct":
             return None
-        if egress in self.proxies:
-            return self.proxies[egress]
         if "://" in egress:
             return egress
-        raise ValueError(f"unknown egress {egress!r}; define it in EGRESS_PROXIES")
+        raise ValueError(f"egress {egress!r} must be 'direct' or a proxy URL such as socks5h://127.0.0.1:1080")
+
+    @staticmethod
+    def egress_label(egress: str) -> str:
+        """An egress safe to log, store and show: proxy credentials masked."""
+        return re.sub(r"(://)[^/@\s]*@", r"\1***@", egress.strip()) or "direct"
 
     @property
     def jobs_dir(self) -> Path:

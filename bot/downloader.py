@@ -768,8 +768,8 @@ class Downloader:
         if not trace.get("ip"):
             return "error: unexpected response"
         parts = [trace["ip"]]
-        if warp := trace.get("warp"):
-            parts.append(f"warp={warp}")
+        if trace.get("warp") in ("on", "plus"):  # Cloudflare marks traffic from its WARP network
+            parts.append(f"warp={trace['warp']}")
         if loc := trace.get("loc"):
             parts.append(loc)
         return " · ".join(parts)

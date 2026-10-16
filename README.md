@@ -4,15 +4,15 @@ Send the bot a YouTube, Instagram, SoundCloud or Spotify track link (or anything
 it sends the file back: video in the quality you pick, or audio with tags and cover. Repeat requests come
 from a `file_id` cache instantly.
 
-Three containers, all with `network_mode: host`. They talk over `127.0.0.1` and every listener is bound
+Two containers, both with `network_mode: host`. They talk over `127.0.0.1` and every listener is bound
 to loopback, so nothing is reachable from outside (the bot uses long polling). Keep these host ports free:
 
 | Service | What | Listens on (loopback) |
 | --- | --- | --- |
 | `bot` | Python 3.13 + aiogram 3, yt-dlp (+ yt-dlp-ejs, Deno), gallery-dl, ffmpeg | `127.0.0.1:9091` metrics |
 | `telegram-bot-api` | Telegram's Bot API server in `--local` mode (uploads up to 2000 MB, by local path) | `127.0.0.1:8081` API, `127.0.0.1:8082` stats |
-| `warp` | Cloudflare WARP via wgcf + wireproxy, as SOCKS5 (YouTube egress) | `socks5h://127.0.0.1:1080` |
-| `windscribe` (optional profile) | Same image with a Windscribe WireGuard config | `socks5h://127.0.0.1:1081` |
+
+Outgoing traffic goes direct unless you point a source at a proxy you run yourself (see [Egress](#egress)).
 
 ```text
 .
@@ -22,11 +22,10 @@ to loopback, so nothing is reachable from outside (the bot uses long polling). K
 ├── compose.yaml
 ├── .env.example            # every setting, with defaults
 ├── telegram-bot-api/       # Bot API server, built from source
-├── warp/                   # WireGuard -> SOCKS5 egress image
 ├── scripts/update.sh       # nightly yt-dlp refresh
 ├── .gitlab-ci.yml          # scheduled pipeline that runs update.sh over SSH
-├── secrets/                # cookies, windscribe.conf (git-ignored, see secrets/README.md)
-├── data/  state/  tg-bot-api/  warp-data/   # created on the server, git-ignored
+├── secrets/                # cookies (git-ignored, see secrets/README.md)
+├── data/  state/  tg-bot-api/   # created on the server, git-ignored
 ```
 
 ## Prerequisites
@@ -60,7 +59,7 @@ docker compose version
 - Your numeric Telegram user id, e.g. from [@userinfobot](https://t.me/userinfobot).
 - Cookies of a burner Google account and a burner Instagram account, Netscape format
   (see [secrets/README.md](secrets/README.md)). Never your main accounts.
-- Optional: a Windscribe WireGuard config, for a second egress to compare against WARP.
+- Optional: a SOCKS5 or HTTP proxy you run, for YouTube if the server's own IP gets blocked.
 
 ## Setup
 
@@ -75,7 +74,7 @@ cp .env.example .env
 nano .env                    # BOT_TOKEN, ADMIN_ID, TELEGRAM_API_ID, TELEGRAM_API_HASH
 chmod 600 .env
 
-mkdir -p data state tg-bot-api warp-data secrets
+mkdir -p data state tg-bot-api secrets
 # copy youtube-cookies.txt and instagram-cookies.txt into secrets/
 chmod 700 secrets && chmod 600 secrets/*
 ```
@@ -133,7 +132,7 @@ services:
 
 ```sh
 docker compose logs -f bot
-docker compose logs -f telegram-bot-api warp
+docker compose logs -f telegram-bot-api
 ```
 
 Logs are rotated by Docker (json-file, 10 MB x 3 per container).
@@ -159,43 +158,29 @@ Talk to the bot in a private chat:
 
 ## Egress
 
-Each source picks its own egress in `.env`: `direct`, a name from `EGRESS_PROXIES`, or a proxy URL.
-The same goes for `EGRESS_INSTAGRAM`, `EGRESS_SOUNDCLOUD` and `EGRESS_GENERIC` (all `direct` by default).
+The bot doesn't run or manage any proxy. Each source goes `direct` (the server's own IP) unless you set
+it to the URL of a proxy you run, in `.env`:
 
 ```sh
-# pick one
-EGRESS_YOUTUBE=warp                                  # default
-EGRESS_YOUTUBE=direct                                # the server's own IP
-EGRESS_YOUTUBE=windscribe                            # after enabling the profile below
-EGRESS_YOUTUBE=socks5h://user:pass@host:port         # any proxy, e.g. residential
+EGRESS_YOUTUBE=socks5h://127.0.0.1:1080              # a SOCKS5 proxy on this host
+EGRESS_YOUTUBE=socks5h://user:pass@host:port         # a remote one, with credentials
+EGRESS_YOUTUBE=http://host:port                      # an HTTP proxy
 ```
 
-**Windscribe as a second egress:**
+`EGRESS_INSTAGRAM`, `EGRESS_SOUNDCLOUD` and `EGRESS_GENERIC` work the same way (all `direct` by default).
+Spotify tracks are downloaded from YouTube, so they follow `EGRESS_YOUTUBE`. Use `socks5h://` rather than
+`socks5://` so DNS is resolved by the proxy too. The bot uses host networking, so `127.0.0.1` is the host.
+Anything that isn't `direct` or a URL stops the bot at startup with an error naming the setting.
+Proxy credentials are masked as `***` in logs, the job history, metrics, alerts and `/selftest`.
 
-1. Generate a WireGuard config in your Windscribe account (Config Generators, WireGuard) and save it
-   as `secrets/windscribe.conf`.
-2. In `.env`:
-   ```sh
-   EGRESS_PROXIES=warp=socks5h://127.0.0.1:1080,windscribe=socks5h://127.0.0.1:1081
-   COMPOSE_PROFILES=windscribe     # so every docker compose command includes it
-   ```
-3. `docker compose --profile windscribe up -d`
+`/selftest` runs every source through `direct` and through each distinct proxy you configured, and shows
+the exit IP of each, so you can see whether the proxy actually helps. After changing `.env`:
+`docker compose up -d bot`.
 
-Run `/selftest` to compare `direct`, `warp` and `windscribe` on the same URLs, then set `EGRESS_YOUTUBE`
-to the winner and `docker compose up -d bot`.
-
-When VPN IPs get flagged ("Sign in to confirm you're not a bot" on every egress), point
-`EGRESS_YOUTUBE` at a residential proxy (`socks5h://user:pass@host:port` or `http://...`), or at a
-WireGuard peer you control: put its config in `secrets/` and add another service like `windscribe`
-with its own `WG_CONFIG` and a free loopback `SOCKS_ADDR` (e.g. `127.0.0.1:1082`). Only the setting changes.
-
-Optional for the egress containers: `WG_RESOLVE_STRATEGY=ipv4|ipv6|auto` (environment) picks the address
-family for proxied hostnames. WARP defaults to IPv6 because its profile has an IPv6 address.
-
-Check which IP an egress exits from:
+Check a proxy by hand from the host:
 
 ```sh
-curl -s --proxy socks5h://127.0.0.1:1080 https://www.cloudflare.com/cdn-cgi/trace   # straight from the host
+curl -s --proxy socks5h://127.0.0.1:1080 https://www.cloudflare.com/cdn-cgi/trace
 ```
 
 ## Spotify
@@ -274,12 +259,11 @@ set `METRICS_HOST` to an address that scraper can reach (e.g. the Docker bridge 
 | Symptom | Fix |
 | --- | --- |
 | Bot logs `Unauthorized` at start | Token typo, or the bot wasn't logged out of the cloud API: run the `logOut` curl above. Check `docker compose logs telegram-bot-api` for a wrong `api_id` / `api_hash`. |
-| "Sign in to confirm you're not a bot" | Refresh `secrets/youtube-cookies.txt` from the burner account, then try another egress (`/selftest`, `EGRESS_YOUTUBE`). |
+| "Sign in to confirm you're not a bot" | Refresh `secrets/youtube-cookies.txt` from the burner account, then point `EGRESS_YOUTUBE` at a proxy with a cleaner IP and compare with `/selftest`. |
+| Every download through a proxy fails | Test it from the host with the `curl --proxy` line under [Egress](#egress); check the URL scheme (`socks5h://`, `http://`) and credentials. |
 | Uploads fail with "file not found" | `/data` differs between `bot` and `telegram-bot-api` (both must mount `./data:/data`), or the Bot API server (uid 101) can't read the files: `chmod 755 data`. |
 | `telegram-bot-api` build dies with `Killed signal terminated program cc1plus` | Out of memory: `--build-arg JOBS=1`, add swap, or use the prebuilt image. |
-| `warp` stays unhealthy | `docker compose logs warp`. Re-register: `docker compose stop warp && sudo rm -rf warp-data/* && docker compose up -d warp`. |
-| `windscribe` restarts in a loop | `secrets/windscribe.conf` missing or not a WireGuard config. |
-| A service logs "address already in use" | Something else on the host holds 8081, 8082, 1080, 1081 or 9091 (`sudo ss -ltnp`); move it, or change `METRICS_PORT` / `SOCKS_ADDR` and the matching `EGRESS_PROXIES` entry. |
+| A service logs "address already in use" | Something else on the host holds 8081, 8082 or 9091 (`sudo ss -ltnp`); move it, or change `METRICS_PORT`. |
 | Bot waits forever at `up` | `telegram-bot-api` is not healthy: `docker compose logs telegram-bot-api`. |
 
 ## Data layout and backup
@@ -289,7 +273,6 @@ set `METRICS_HOST` to an address that scraper can reach (e.g. the Docker bridge 
 | `.env`, `secrets/` | Token, API keys, cookies | Yes (keep private) |
 | `state/bot.db` | SQLite: `file_id` cache, users and bans, job history | Yes |
 | `tg-bot-api/` | Bot API server state and files users sent (owned by uid 101) | No, recreated on login |
-| `warp-data/` | WARP account and WireGuard profile | Optional, re-registers if lost |
 | `data/` | Per-job temp files, removed after delivery | No |
 
 Online backup of the database (consistent even while the bot runs; lands in `state/bot-backup.db`):
