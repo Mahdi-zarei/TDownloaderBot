@@ -90,6 +90,7 @@ def _rx(*parts: str) -> re.Pattern[str]:
 
 # Checked in order against tool output; the flag marks errors a retry with cookies may fix.
 _ERROR_RULES: tuple[tuple[re.Pattern[str], Reason, bool], ...] = (
+    (_rx(r"drm[- ]?protected", r"protected by drm", r"\bwidevine\b"), Reason.DRM, False),
     (_rx(r"sign in to confirm you.?re not a bot"), Reason.BLOCKED, True),
     (_rx(r"private video", r"account is private", r"posts are private", r"\bis private\b"), Reason.PRIVATE, False),
     (_rx(r"sign in to confirm your age", r"age[- ]restricted", r"inappropriate for some users"), Reason.LOGIN_REQUIRED, True),
@@ -135,7 +136,7 @@ _ERROR_RULES: tuple[tuple[re.Pattern[str], Reason, bool], ...] = (
 
 # Most informative first, for picking one error when every post tool failed.
 _REASON_RANK = (
-    Reason.PRIVATE, Reason.UNAVAILABLE, Reason.LOGIN_REQUIRED, Reason.BLOCKED, Reason.LIVE, Reason.TOO_LARGE,
+    Reason.PRIVATE, Reason.DRM, Reason.UNAVAILABLE, Reason.LOGIN_REQUIRED, Reason.BLOCKED, Reason.LIVE, Reason.TOO_LARGE,
     Reason.TOO_LONG, Reason.UNSUPPORTED, Reason.PLAYLIST, Reason.TIMEOUT, Reason.FAILED, Reason.NO_MEDIA,
 )
 
@@ -151,8 +152,10 @@ class SelftestResult:
 
 
 class _ToolError(DownloadError):
-    def __init__(self, reason: Reason, detail: str = "", *, auth: bool = False, user_text: str | None = None):
-        super().__init__(reason, detail, user_text=user_text)
+    def __init__(
+        self, reason: Reason, detail: str = "", *, auth: bool = False, user_text: str | None = None, cause: str = ""
+    ):
+        super().__init__(reason, detail, user_text=user_text, cause=cause)
         self.auth = auth  # a retry with cookies may help
 
 
@@ -274,6 +277,28 @@ def _diagnose(stderr: Iterable[str]) -> tuple[Reason, bool]:
     return _classify(errors) or _classify(lines) or (Reason.FAILED, False)
 
 
+# yt-dlp: "ERROR: [soundcloud] 1552744678: This video is DRM protected"; gallery-dl: "[instagram][error] ..."
+_ERROR_LINE = re.compile(r"^(?:ERROR:|\[[\w:.-]+\]\[error\]|\[error\])\s*(.+)$", re.IGNORECASE)
+_EXTRACTOR_PREFIX = re.compile(r"^\[[^\]]+\]\s*(?:[\w-]+:\s+)?")
+# Advice aimed at the person running the tool, not at the bot's users.
+_TOOL_ADVICE = re.compile(
+    r"\s*(?:;\s*)?(?:please report this issue|use --|see\s+https?://|also see|confirm you are on the latest).*$",
+    re.IGNORECASE,
+)
+_PAREN_NOISE = re.compile(r"\s*\((?:caused by|https?://)[^)]*\)\s*", re.IGNORECASE)
+
+
+def _cause(stderr: Iterable[str]) -> str:
+    """The site's own explanation from the last error line, cleaned up for users; "" when there is none."""
+    for line in reversed(list(stderr)):
+        if m := _ERROR_LINE.match(line.strip()):
+            text = _TOOL_ADVICE.sub("", _EXTRACTOR_PREFIX.sub("", m[1]))
+            text = _PAREN_NOISE.sub(" ", text).strip(" .;:")
+            if text:
+                return _truncate(_redact(text), 200)
+    return ""
+
+
 def _read_sizes(path: Path) -> dict[str, float | None]:
     """format_id -> expected bytes, from the before_dl print of requested_formats."""
     lines = _read_lines(path)
@@ -359,7 +384,7 @@ def _most_informative(errors: list[tuple[Tool, DownloadError]]) -> DownloadError
     rank = {reason: i for i, reason in enumerate(_REASON_RANK)}
     _, best = min(errors, key=lambda te: rank.get(te[1].reason, len(rank)))
     detail = "\n\n".join(f"[{tool}] {e.detail}" for tool, e in errors)
-    return DownloadError(best.reason, detail, user_text=best.user_text)
+    return DownloadError(best.reason, detail, user_text=best.user_text, cause=best.cause)
 
 
 # ---------------------------------------------------------------- video formats
@@ -836,7 +861,7 @@ class Downloader:
                 return await self._with_cookies(src, scratch, attempt)
             except DownloadError as second:
                 detail = f"{first.detail}\n\n[retry with cookies]\n{second.detail}"
-                raise _ToolError(second.reason, detail, user_text=second.user_text) from second
+                raise _ToolError(second.reason, detail, user_text=second.user_text, cause=second.cause) from second
 
     @staticmethod
     async def _with_cookies[T](src: Path, scratch: Path, attempt: Callable[[Path | None], Awaitable[T]]) -> T:
@@ -863,7 +888,7 @@ class Downloader:
         if any("max-filesize" in n for n in run.notes):
             return _ToolError(Reason.TOO_LARGE, detail)
         reason, auth = _diagnose(run.stderr)
-        return _ToolError(reason, detail, auth=auth)
+        return _ToolError(reason, detail, auth=auth, cause=_cause(run.stderr))
 
     def _too_long(self, duration: float, detail: str = "") -> _ToolError:
         limit = self.settings.max_duration
@@ -907,8 +932,11 @@ class Downloader:
         duration = _num(d.get("duration"))
         if duration and duration > self.settings.max_duration:
             raise self._too_long(duration, info.webpage_url)
-        formats = [f for f in (d.get("formats") or [d]) if isinstance(f, dict) and _usable(f)]
+        listed = [f for f in (d.get("formats") or [d]) if isinstance(f, dict)]
+        formats = [f for f in listed if _usable(f)]
         if not formats:
+            if any(f.get("has_drm") for f in listed):
+                raise DownloadError(Reason.DRM, f"{info.webpage_url}: every format is DRM-protected")
             raise DownloadError(Reason.NO_MEDIA, f"{info.webpage_url}: no usable formats")
         has_audio = any(f.get("acodec") != "none" for f in formats)
         qualities = self._qualities(d, formats, duration)
@@ -1124,7 +1152,7 @@ class Downloader:
                 reason = Reason.BLOCKED
             elif run.code & 64:
                 reason = Reason.UNSUPPORTED
-        return _ToolError(reason, run.detail(), auth=auth)
+        return _ToolError(reason, run.detail(), auth=auth, cause=_cause(run.stderr))
 
     async def _ytdlp_post(
         self, rule: SourceRule, url: str, workdir: Path, progress: Progress, *, egress: str, deadline: float

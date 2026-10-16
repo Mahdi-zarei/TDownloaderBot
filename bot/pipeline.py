@@ -149,6 +149,21 @@ def queued_text(ctx: Ctx, job: Job) -> str | None:
     return f"⏳ Queued · {ahead} ahead" if ahead else "⏳ Queued"
 
 
+# Reasons where the site's own words add something; for the others our text says it all, or the site's
+# text would mislead (a bot check tells users to sign in, which they can't do here).
+SHOW_CAUSE = frozenset({Reason.PRIVATE, Reason.UNAVAILABLE, Reason.LOGIN_REQUIRED, Reason.NO_MEDIA, Reason.FAILED})
+
+
+def failure_text(e: DownloadError) -> str:
+    """The user's failure message: our reason, the site's explanation when useful, and whether the admin knows."""
+    lines = ["⚠️ " + html.escape(e.user_text)]
+    if e.cause and e.reason in SHOW_CAUSE:
+        lines.append(f"<i>Details: {html.escape(e.cause)}</i>")
+    if not e.expected:
+        lines.append("The admin has been notified.")
+    return "\n".join(lines)
+
+
 def queue_full_text(ctx: Ctx, user_id: int) -> str:
     n = len(ctx.jobs.user_jobs(user_id))
     return f"You already have {n} jobs queued — wait for one to finish."
@@ -335,7 +350,7 @@ async def report_failure(ctx: Ctx, job: Job, exc: Exception) -> None:
     source = job.rule.name
     if isinstance(exc, DownloadError):
         status = JobStatus.TIMEOUT if exc.reason is Reason.TIMEOUT else JobStatus.FAILED
-        text = "⚠️ " + html.escape(exc.user_text)
+        text = failure_text(exc)
         error = f"{exc.reason}: {exc.detail[-2000:]}" if exc.detail else str(exc.reason)
         reason, kind, alert = str(exc.reason), f"{source}:{exc.reason}", not exc.expected
     else:

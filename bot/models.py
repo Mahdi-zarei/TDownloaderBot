@@ -34,6 +34,7 @@ class Reason(StrEnum):
     TOO_LONG = "too_long"
     LIVE = "live"
     NO_MEDIA = "no_media"
+    DRM = "drm"
     TIMEOUT = "timeout"
     FAILED = "failed"
 
@@ -49,24 +50,30 @@ USER_TEXT: dict[Reason, str] = {
     Reason.TOO_LONG: "This is longer than the allowed maximum length.",
     Reason.LIVE: "Live streams can't be downloaded.",
     Reason.NO_MEDIA: "No downloadable media found at this link.",
+    Reason.DRM: "This is DRM-protected (for example a SoundCloud Go+ track or other paid content), so it can't be downloaded.",
     Reason.TIMEOUT: "The download took too long and was stopped.",
     Reason.FAILED: "The download failed.",
 }
 
 # Failures caused by the link itself; everything else is reported to the admin.
 EXPECTED_REASONS = frozenset(
-    {Reason.UNSUPPORTED, Reason.PLAYLIST, Reason.PRIVATE, Reason.TOO_LARGE, Reason.TOO_LONG, Reason.LIVE}
+    {Reason.UNSUPPORTED, Reason.PLAYLIST, Reason.PRIVATE, Reason.TOO_LARGE, Reason.TOO_LONG, Reason.LIVE, Reason.DRM}
 )
 
 
 class DownloadError(Exception):
-    """A failure with a user-facing reason. `detail` carries the full tool output for the admin."""
+    """A failure with a user-facing reason.
 
-    def __init__(self, reason: Reason, detail: str = "", *, user_text: str | None = None):
+    `detail` carries the full tool output for the admin; `cause` is the site's own one-line
+    explanation (e.g. "This video has been removed by the uploader"), safe to show users.
+    """
+
+    def __init__(self, reason: Reason, detail: str = "", *, user_text: str | None = None, cause: str = ""):
         super().__init__(f"{reason}: {detail[-1000:]}" if detail else str(reason))
         self.reason = reason
         self.detail = detail
         self.user_text = user_text or USER_TEXT[reason]
+        self.cause = cause
 
     @property
     def expected(self) -> bool:

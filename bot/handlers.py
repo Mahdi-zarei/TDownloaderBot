@@ -240,7 +240,7 @@ async def _open_picker(ctx: Ctx, message: Message, user_id: int, rule: SourceRul
         if probe.info.duration and probe.info.duration > ctx.settings.max_duration:
             raise DownloadError(Reason.TOO_LONG, f"{probe.info.duration:.0f}s")
     except DownloadError as e:
-        await pipeline.edit_message(ctx.bot, chat_id, status.message_id, "⚠️ " + html.escape(e.user_text))
+        await pipeline.edit_message(ctx.bot, chat_id, status.message_id, pipeline.failure_text(e))
         if not e.expected:
             await ctx.alerts.error(
                 f"{rule.name}:{e.reason}", f"Probe failed ({e.reason})", e, user=user_id, source=rule.name, url=ref.url,
