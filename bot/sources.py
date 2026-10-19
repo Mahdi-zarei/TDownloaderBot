@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from . import spotify
 from .config import Settings
-from .models import DownloadError, MediaRef, Reason, TrackMeta
+from .models import DownloadError, MediaRef, Reason, TrackList, TrackMeta
 
 
 class Mode(StrEnum):
@@ -23,6 +23,7 @@ class Mode(StrEnum):
     AUDIO = "audio"  # straight to audio with default tags
     POST = "post"  # every item in the post, photos and videos
     MATCH = "match"  # metadata from this source, audio matched on another (SourceRule.match_via)
+    LIST = "list"  # a playlist or album: the user picks tracks, each handled as its own link
 
 
 class CookiesPolicy(StrEnum):
@@ -54,6 +55,8 @@ class SourceRule:
     # MATCH mode: reads the track's metadata, and names the rule whose download path fetches the audio.
     fetch_meta: Callable[[str], Awaitable[TrackMeta]] | None = None
     match_via: str | None = None
+    # LIST mode: reads the list's tracks.
+    fetch_list: Callable[[str], Awaitable[TrackList]] | None = None
     # Shares another rule's concurrency limit (jobs that really download from that site).
     limit_group: str | None = None
 
@@ -173,7 +176,15 @@ def _soundcloud(url: str) -> MediaRef | None:
 
 _SP_HOSTS = {"open.spotify.com", "play.spotify.com"}
 _SP_ID = re.compile(r"[0-9A-Za-z]{22}")
-_SP_COLLECTIONS = {"album", "playlist", "artist", "user", "collection"}
+_SP_LISTS = {"album", "playlist"}
+_SP_COLLECTIONS = {"artist", "user", "collection"}
+
+
+def _spotify_segs(url: str) -> list[str] | None:
+    _, host, segs = _split(url)
+    if host not in _SP_HOSTS:
+        return None
+    return segs[1:] if segs and segs[0].startswith("intl-") else segs
 
 
 def _spotify(url: str) -> MediaRef | None:
@@ -182,17 +193,25 @@ def _spotify(url: str) -> MediaRef | None:
         if not segs:
             raise DownloadError(Reason.UNSUPPORTED, url)
         return MediaRef("spotify", f"link-{segs[0]}", url)  # resolved to the track page when fetched
-    if host not in _SP_HOSTS:
+    if (segs := _spotify_segs(url)) is None:
         return None
-    if segs and segs[0].startswith("intl-"):
-        segs = segs[1:]
     if len(segs) >= 2 and segs[0] == "track" and _SP_ID.fullmatch(segs[1]):
         return MediaRef("spotify", segs[1], f"https://open.spotify.com/track/{segs[1]}")
     if segs and segs[0] in _SP_COLLECTIONS:
-        raise DownloadError(Reason.PLAYLIST, url)
+        raise DownloadError(
+            Reason.PLAYLIST, url,
+            user_text="Spotify artists, profiles and Liked Songs aren't supported. Send a track, album or playlist.",
+        )
     raise DownloadError(
-        Reason.UNSUPPORTED, url, user_text="Only Spotify tracks are supported (no podcasts, albums or playlists)."
+        Reason.UNSUPPORTED, url, user_text="Only Spotify tracks, albums and playlists are supported (no podcasts)."
     )
+
+
+def _spotify_list(url: str) -> MediaRef | None:
+    segs = _spotify_segs(url)
+    if not segs or len(segs) < 2 or segs[0] not in _SP_LISTS or not _SP_ID.fullmatch(segs[1]):
+        return None
+    return MediaRef("spotify_list", segs[1], f"https://open.spotify.com/{segs[0]}/{segs[1]}")
 
 
 def _internal(host: str) -> bool:
@@ -250,6 +269,15 @@ def build_rules(s: Settings) -> list[SourceRule]:
             mode=Mode.AUDIO,
             egress=s.egress_soundcloud,
             parse=_soundcloud,
+        ),
+        SourceRule(
+            name="spotify_list",
+            label="Spotify",
+            mode=Mode.LIST,
+            # Only the track list is read here, straight from Spotify; each track then runs as a "spotify" job.
+            egress="direct",
+            parse=_spotify_list,
+            fetch_list=spotify.fetch_list,
         ),
         SourceRule(
             name="spotify",

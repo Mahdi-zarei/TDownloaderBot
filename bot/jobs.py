@@ -48,6 +48,7 @@ class JobManager:
         self._user_sems: dict[int, asyncio.Semaphore] = {}
         self._source_sems = {name: asyncio.Semaphore(n) for name, n in source_limits.items() if n}
         self._jobs: dict[int, Job] = {}
+        self._freed = asyncio.Event()  # set whenever a job leaves
 
     def all(self) -> list[Job]:
         return list(self._jobs.values())
@@ -84,6 +85,13 @@ class JobManager:
         # Only tasks of jobs still in _jobs can hold or wait on a user's semaphore, so with none left it is idle.
         if not self.user_jobs(job.user_id):
             self._user_sems.pop(job.user_id, None)
+        self._freed.set()
+
+    async def wait_for_room(self, user_id: int) -> None:
+        """Returns once the user may submit another job (which another submit can still take first)."""
+        while not self.can_submit(user_id):
+            self._freed.clear()
+            await self._freed.wait()
 
     @asynccontextmanager
     async def slot(self, job: Job) -> AsyncIterator[None]:

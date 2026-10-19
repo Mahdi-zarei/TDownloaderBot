@@ -17,7 +17,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError, Telegra
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefault, User
 
-from . import admin, handlers, manage, tag_editor
+from . import admin, handlers, manage, playlist, tag_editor
 from .alerts import Alerts
 from .config import Settings
 from .context import Ctx
@@ -97,6 +97,7 @@ async def housekeeping(ctx: Ctx) -> None:
         await asyncio.sleep(HOUSEKEEPING_INTERVAL)
         try:
             await handlers.expire_pickers(ctx)
+            await playlist.expire_sessions(ctx)
             tag_editor.expire_sessions(ctx)
         except Exception:
             log.exception("housekeeping failed")
@@ -166,7 +167,7 @@ async def main() -> None:
         dp.message.outer_middleware(access)
         dp.callback_query.outer_middleware(access)
         dp.errors.register(handlers.on_error)
-        dp.include_routers(admin.router, manage.router, tag_editor.router, handlers.router)
+        dp.include_routers(admin.router, manage.router, tag_editor.router, playlist.router, handlers.router)
 
         ctx.spawn(housekeeping(ctx), name="housekeeping")
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types(), close_bot_session=False)

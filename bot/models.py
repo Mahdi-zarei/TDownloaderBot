@@ -41,7 +41,7 @@ class Reason(StrEnum):
 
 USER_TEXT: dict[Reason, str] = {
     Reason.UNSUPPORTED: "This link isn't supported.",
-    Reason.PLAYLIST: "Playlists, albums, sets, profiles and channels aren't supported. Send a single item.",
+    Reason.PLAYLIST: "Playlists, albums, sets, profiles and channels from this site aren't supported. Send a single item.",
     Reason.PRIVATE: "This media is private.",
     Reason.UNAVAILABLE: "This media is unavailable (removed or region-locked).",
     Reason.LOGIN_REQUIRED: "This media needs a signed-in account (age-restricted, members-only, or the site blocked guests).",
@@ -188,6 +188,26 @@ class TrackMeta:
     year: str = ""
     duration: float | None = None
     cover_url: str | None = None
+
+
+@dataclass(slots=True)
+class ListItem:
+    url: str  # the track's own link, handled like a link the user sent
+    title: str
+    artist: str
+    duration: float | None = None
+
+
+@dataclass(slots=True)
+class TrackList:
+    """A playlist or album: its tracks, each downloaded as its own link."""
+
+    url: str
+    kind: str  # "playlist" or "album"
+    title: str
+    owner: str  # playlist owner or album artist
+    items: list[ListItem]
+    total: int  # tracks in the list; more than len(items) when the source shows only the first ones
 
 
 @dataclass(slots=True)

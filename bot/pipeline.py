@@ -33,7 +33,7 @@ from .models import (
     Tags,
     too_long_text,
 )
-from .sources import SourceRule
+from .sources import Mode, SourceRule
 
 log = logging.getLogger(__name__)
 
@@ -273,9 +273,15 @@ async def enqueue(
     status_message_id: int | None = None,
     view: View | None = None,
     data: dict[str, Any] | None = None,
+    silent: bool = False,
 ) -> Job | None:
-    """Creates the job row and status message and submits the job; None when the user's queue is full."""
+    """Creates the job row and status message and submits the job; None when the user's queue is full.
+
+    A silent job posts no status message and no queue-full notice: a playlist shows its progress itself.
+    """
     if not ctx.jobs.can_submit(user_id):
+        if silent:
+            return None
         text = queue_full_text(ctx, user_id)
         if status_message_id is None:
             await ctx.bot.send_message(chat_id, text, reply_parameters=reply_params(reply_to))
@@ -291,22 +297,26 @@ async def enqueue(
         data={"reply_to": reply_to, **(data or {})},
     )
     render = view or status_view(ctx)
-    text, markup = render(job)
-    try:
-        if status_message_id is None:
-            msg = await ctx.bot.send_message(chat_id, text, reply_markup=markup, reply_parameters=reply_params(reply_to))
-            status_message_id = msg.message_id
-        else:
-            await edit_message(ctx.bot, chat_id, status_message_id, text, markup)
-    except Exception:
-        await quiet(ctx.db.job_finish(job_id, JobStatus.FAILED, error="could not post the status message"))
-        raise
-    job.status_message_id = status_message_id
-    job.data["_shown"] = (text, markup)
+    if not silent:
+        text, markup = render(job)
+        try:
+            if status_message_id is None:
+                msg = await ctx.bot.send_message(
+                    chat_id, text, reply_markup=markup, reply_parameters=reply_params(reply_to)
+                )
+                status_message_id = msg.message_id
+            else:
+                await edit_message(ctx.bot, chat_id, status_message_id, text, markup)
+        except Exception:
+            await quiet(ctx.db.job_finish(job_id, JobStatus.FAILED, error="could not post the status message"))
+            raise
+        job.status_message_id = status_message_id
+        job.data["_shown"] = (text, markup)
     try:
         ctx.jobs.submit(job, lambda j: run(ctx, j, flow, render))
     except QueueFull:  # another link of the same user won the race
-        await edit_message(ctx.bot, chat_id, status_message_id, queue_full_text(ctx, user_id))
+        if job.status_message_id is not None:
+            await edit_message(ctx.bot, chat_id, job.status_message_id, queue_full_text(ctx, user_id))
         await quiet(ctx.db.job_finish(job_id, JobStatus.CANCELLED, error="queue full"))
         return None
     return job
@@ -333,6 +343,7 @@ async def run(ctx: Ctx, job: Job, flow: Flow, view: View) -> None:
         await asyncio.shield(ctx.spawn(report_cancel(ctx, job), name=f"cancel-{job.id}"))
         raise
     except Exception as e:
+        job.data["error"] = e
         await report_failure(ctx, job, e)
     finally:
         if not job.data.get("keep_dir"):
@@ -411,6 +422,23 @@ async def record_failure(
     return job_id, alert
 
 
+async def lookup_failed(
+    ctx: Ctx, rule: SourceRule, ref: MediaRef, fmt: str, exc: Exception, *, user_id: int, chat_id: int,
+    message_id: int, what: str,
+) -> None:
+    """Shows, records and (when unexpected) reports a failure before any job, e.g. `what`="Reading formats"."""
+    known = exc if isinstance(exc, DownloadError) else None
+    await edit_message(ctx.bot, chat_id, message_id, failure_text(known) if known else GENERIC_FAILURE)
+    job_id, alert = await record_failure(ctx, rule, ref, fmt, user_id, exc)
+    if alert:
+        await ctx.alerts.error(
+            f"{rule.name}:{known.reason}" if known else f"{rule.name}:{fmt}",
+            f"{what} failed" if known else f"{what} crashed", exc, private=[ref.media_id],
+            user=user_id, source=rule.name, job=job_id, link=f"/link_{job_id}" if job_id else None,
+            cookies=rule.cookies_problem(),
+        )
+
+
 # Flows
 
 
@@ -479,3 +507,11 @@ async def post_flow(ctx: Ctx, job: Job, workdir: Path) -> Sent:
     )
     await _cache(ctx, job, sent)
     return sent
+
+
+# Modes that start downloading right away: the format part of the cache key and the flow.
+FLOWS: dict[Mode, tuple[str, Flow]] = {
+    Mode.AUDIO: ("audio", audio_flow),
+    Mode.MATCH: ("audio", match_flow),
+    Mode.POST: ("post", post_flow),
+}

@@ -7,6 +7,7 @@ in the quality you pick, or audio with tags and cover art.
 - Files up to 2 GB, through a local Telegram Bot API server.
 - Quality picker with file sizes; audio as tagged M4A, with an editor for your own tags and cover.
 - Instagram reels, photo posts and carousels; Spotify tracks matched to the same song on YouTube Music.
+- Spotify albums and playlists: pick the tracks you want, or download them all.
 - Repeat requests are answered instantly from a cache.
 - Per-source egress: direct, built-in Cloudflare WARP, or your own SOCKS5/HTTP proxy.
 - Admin tools (stats, users, bans, broadcast, failure log, `/selftest`) that don't show the admin what
@@ -105,8 +106,14 @@ these:
 
 **Spotify:** Spotify audio is DRM-protected. The bot reads the track's metadata from the public page, finds the
 same song on YouTube Music (matching title and duration) and downloads it through YouTube's egress. It then
-tags the file with Spotify's metadata and cover. Only single tracks work, at YouTube's audio quality (AAC,
-about 128 kbps). The caption links the matched upload.
+tags the file with Spotify's metadata and cover, at YouTube's audio quality (AAC, about 128 kbps). The caption
+links the matched upload.
+
+For an album or playlist link the bot lists its tracks (from Spotify's public embed player, which shows at most
+the first 100). Tap tracks to pick them, or download all. The tracks then arrive one by one, each as its own
+download (cached, counted and limited like any other), with a summary of what could not be matched at the end.
+One list per user downloads at a time, and `/cancel` stops it. Private playlists, Liked Songs, artists and
+podcasts aren't supported.
 
 ## Updating
 

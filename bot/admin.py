@@ -13,7 +13,7 @@ from aiogram import Router
 from aiogram.filters import Command, CommandObject, Filter
 from aiogram.types import CallbackQuery, Message
 
-from . import matching, pipeline, tag_editor
+from . import matching, pipeline, playlist, tag_editor
 from .config import Settings
 from .context import Ctx
 from .downloader import SelftestResult
@@ -42,8 +42,9 @@ def fmt_bytes(n: float) -> str:
 
 
 async def stop_user_work(ctx: Ctx, user_id: int) -> int:
-    """Cancels the user's jobs and closes their tag editors; returns how many were stopped."""
-    return await tag_editor.close_user(ctx, user_id) + ctx.jobs.cancel_user(user_id)
+    """Cancels the user's playlists and jobs and closes their tag editors; returns how many were stopped."""
+    lists = await playlist.close_user(ctx, user_id)
+    return lists + await tag_editor.close_user(ctx, user_id) + ctx.jobs.cancel_user(user_id)
 
 
 # Selftest
@@ -124,6 +125,7 @@ async def _selftest(ctx: Ctx, message: Message) -> None:
     finally:
         shutil.rmtree(base, ignore_errors=True)
     rows[("spotify", "match")] = await _spotify_row(ctx)
+    rows[("spotify", "list")] = await _spotify_list_row(ctx)
     await pipeline.edit_message(ctx.bot, status.chat.id, status.message_id, render())
 
 
@@ -142,6 +144,21 @@ async def _spotify_row(ctx: Ctx) -> str:
         return "❌ spotify · match · error"
     found = html.escape(pipeline.truncate(f"{match.title} — {match.channel}", 60))
     return f"✅ spotify · match via {html.escape(match.via)} · {time.monotonic() - started:.1f}s\n    {found}"
+
+
+async def _spotify_list_row(ctx: Ctx) -> str:
+    """Reading a playlist's tracks; each track then downloads like the row above."""
+    rule = ctx.sources.get("spotify_list")
+    assert rule.fetch_list is not None
+    started = time.monotonic()
+    try:
+        tracks = await rule.fetch_list(ctx.settings.selftest_spotify_list)
+    except DownloadError as e:
+        return f"❌ spotify · playlist · {html.escape(e.reason)}"
+    except Exception:
+        log.exception("selftest spotify playlist crashed")
+        return "❌ spotify · playlist · error"
+    return f"✅ spotify · playlist · {len(tracks.items)} tracks · {time.monotonic() - started:.1f}s"
 
 
 # Bans

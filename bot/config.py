@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     selftest_instagram: str = "https://www.instagram.com/p/aye83DjauH/"
     selftest_soundcloud: str = "https://soundcloud.com/forss/flickermood"
     selftest_spotify: str = "https://open.spotify.com/track/4PTG3Z6ehGkBFwjybzWkR8"
+    selftest_spotify_list: str = "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M"
 
     @cached_property
     def allowed_user_ids(self) -> frozenset[int]:

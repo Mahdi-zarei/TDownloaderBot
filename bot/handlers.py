@@ -28,7 +28,7 @@ from aiogram.types import (
     User,
 )
 
-from . import pipeline, tag_editor
+from . import pipeline, playlist, tag_editor
 from .admin import stop_user_work
 from .context import Ctx
 from .models import DownloadError, MediaRef, Probe, Quality
@@ -39,7 +39,8 @@ router = Router(name="user")
 
 START_TEXT = (
     "👋 Send me a link and I'll send the file back.\n\n"
-    "Works with YouTube, Instagram, SoundCloud, Spotify tracks and most other video sites. /help for details."
+    "Works with YouTube, Instagram, SoundCloud, Spotify tracks, albums and playlists, and most other video sites. "
+    "/help for details."
 )
 HELP_TEXT = (
     "<b>How it works</b>\n"
@@ -48,7 +49,8 @@ HELP_TEXT = (
     "to set title, artist, album, year, cover and format.\n"
     "• <b>Instagram</b>: every photo and video of the post, reel or story.\n"
     "• <b>SoundCloud</b>: the track as audio.\n"
-    "• <b>Spotify</b>: single tracks, found on YouTube Music and tagged with Spotify's title, artist, album and cover.\n\n"
+    "• <b>Spotify</b>: tracks, found on YouTube Music and tagged with Spotify's title, artist, album and cover. "
+    "For an album or playlist, pick the tracks you want or download all (up to its first 100).\n\n"
     "⚡ marks formats that arrive instantly from cache.\n"
     "/cancel stops your downloads."
 )
@@ -172,11 +174,10 @@ async def _handle_link(ctx: Ctx, message: Message, user_id: int, url: str, *, mu
         if rule.mode is Mode.PICK:
             await _open_picker(ctx, message, user_id, rule, ref)
             return
-        fmt, flow = {
-            Mode.AUDIO: ("audio", pipeline.audio_flow),
-            Mode.MATCH: ("audio", pipeline.match_flow),
-            Mode.POST: ("post", pipeline.post_flow),
-        }[rule.mode]
+        if rule.mode is Mode.LIST:
+            await playlist.open_list(ctx, message, user_id, rule, ref)
+            return
+        fmt, flow = pipeline.FLOWS[rule.mode]
         chat_id = message.chat.id
         if await pipeline.send_from_cache(
             ctx, rule, ref, fmt, user_id=user_id, chat_id=chat_id, reply_to=message.message_id
@@ -234,17 +235,10 @@ async def _open_picker(ctx: Ctx, message: Message, user_id: int, rule: SourceRul
     try:
         probe = await ctx.downloader.probe(rule, ref.url)
     except Exception as e:
-        known = e if isinstance(e, DownloadError) else None
-        text = pipeline.failure_text(known) if known else pipeline.GENERIC_FAILURE
-        await pipeline.edit_message(ctx.bot, chat_id, status.message_id, text)
-        job_id, alert = await pipeline.record_failure(ctx, rule, ref, "probe", user_id, e)
-        if alert:
-            await ctx.alerts.error(
-                f"{rule.name}:{known.reason}" if known else f"{rule.name}:probe",
-                "Reading formats failed" if known else "Reading formats crashed", e, private=[ref.media_id],
-                user=user_id, source=rule.name, job=job_id, link=f"/link_{job_id}" if job_id else None,
-                cookies=rule.cookies_problem(),
-            )
+        await pipeline.lookup_failed(
+            ctx, rule, ref, "probe", e, user_id=user_id, chat_id=chat_id, message_id=status.message_id,
+            what="Reading formats",
+        )
         return
 
     token = secrets.token_urlsafe(6)
