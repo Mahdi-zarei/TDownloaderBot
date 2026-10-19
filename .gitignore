@@ -1,7 +1,9 @@
 .env
+compose.override.yaml
 data/
 state/
 tg-bot-api/
+warp-data/
 secrets/*
 !secrets/README.md
 __pycache__/

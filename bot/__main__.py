@@ -31,7 +31,7 @@ from .sources import Sources
 log = logging.getLogger(__name__)
 
 USER_COMMANDS = [
-    BotCommand(command="start", description="Start"),
+    BotCommand(command="start", description="Start the bot"),
     BotCommand(command="help", description="How it works"),
     BotCommand(command="cancel", description="Cancel your downloads"),
 ]
@@ -112,6 +112,11 @@ async def shutdown(ctx: Ctx) -> None:
         task.cancel()
     if pending or background:
         await asyncio.wait([*pending, *background], timeout=15)
+    # Cards whose download already finished have no job left to cancel.
+    try:
+        await tag_editor.close_all(ctx)
+    except Exception:
+        log.exception("closing tag editors failed")
 
 
 async def main() -> None:

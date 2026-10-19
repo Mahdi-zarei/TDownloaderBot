@@ -20,7 +20,19 @@ from .alerts import scrub
 from .context import Ctx
 from .db import JobStatus
 from .jobs import Job, QueueFull
-from .models import DownloadError, MediaInfo, MediaRef, PostFiles, Progress, Quality, Reason, Sent, Stage, Tags
+from .models import (
+    DownloadError,
+    MediaInfo,
+    MediaRef,
+    PostFiles,
+    Progress,
+    Quality,
+    Reason,
+    Sent,
+    Stage,
+    Tags,
+    too_long_text,
+)
 from .sources import SourceRule
 
 log = logging.getLogger(__name__)
@@ -29,13 +41,15 @@ CAPTION_LIMIT = 1024
 GENERIC_FAILURE = "⚠️ Something went wrong. The admin has been notified."
 CANCELLED_TEXT = "✖ Cancelled."
 RESTART_TEXT = "✖ Stopped: the bot is restarting. Send the link again."
+EXPIRED_TEXT = "Expired — send the link again."
+EXPIRED_POPUP = "This has expired — send the link again."
 
 STAGE_LABEL = {
     Stage.QUEUED: "⏳ Queued",
     Stage.STARTING: "⏳ Starting…",
-    Stage.DOWNLOADING: "⬇️ Downloading",
-    Stage.PROCESSING: "⚙️ Processing",
-    Stage.UPLOADING: "📤 Uploading",
+    Stage.DOWNLOADING: "⬇️ Downloading…",
+    Stage.PROCESSING: "⚙️ Processing…",
+    Stage.UPLOADING: "📤 Uploading…",
 }
 
 Markup = InlineKeyboardMarkup | None
@@ -167,7 +181,7 @@ def failure_text(e: DownloadError) -> str:
 
 def queue_full_text(ctx: Ctx, user_id: int) -> str:
     n = len(ctx.jobs.user_jobs(user_id))
-    return f"You already have {n} jobs queued — wait for one to finish."
+    return f"You already have {n} download{'s' if n != 1 else ''} in progress. Wait for one to finish, or use /cancel."
 
 
 def video_caption(info: MediaInfo, url: str) -> str:
@@ -175,7 +189,7 @@ def video_caption(info: MediaInfo, url: str) -> str:
 
 
 def audio_caption(rule: SourceRule, info: MediaInfo, url: str) -> str:
-    label = info.extractor if rule.name == "generic" and info.extractor else rule.label
+    label = info.extractor if rule.name == "generic" and info.extractor not in ("", "Generic") else rule.label
     return link(info.webpage_url or url, label)
 
 
@@ -237,8 +251,12 @@ async def send_from_cache(
         return False
     ctx.metrics.cache_hit(rule.name)
     egress = ctx.settings.egress_label(rule.egress)
-    job_id = await ctx.db.job_create(user_id, rule.name, fmt, egress=egress, status=JobStatus.CACHED)
-    await quiet(ctx.db.job_finish(job_id, JobStatus.CACHED))
+
+    async def record() -> None:
+        job_id = await ctx.db.job_create(user_id, rule.name, fmt, egress=egress, status=JobStatus.CACHED)
+        await ctx.db.job_finish(job_id, JobStatus.CACHED)
+
+    await quiet(record())
     return True
 
 
@@ -354,7 +372,7 @@ def classify_failure(source: str, exc: Exception, ref: MediaRef) -> tuple[str, s
         error = f"{exc.reason}: {exc.detail[-2000:]}" if exc.detail else str(exc.reason)
         reason, kind, alert = str(exc.reason), f"{source}:{exc.reason}", not exc.expected
     else:
-        status, error = JobStatus.FAILED, f"{type(exc).__name__}: {exc}"[-2000:]
+        status, error = JobStatus.FAILED, f"{type(exc).__name__}: {str(exc)[-2000:]}"
         reason, kind, alert = str(Reason.FAILED), f"{source}:{type(exc).__name__}", True
     # The failed request's link is kept in its own column for /link; the error text stays link-free.
     return status, scrub(error, [ref.media_id]), reason, kind, alert
@@ -434,7 +452,9 @@ async def match_flow(ctx: Ctx, job: Job, workdir: Path) -> Sent:
     job.progress.set(Stage.STARTING, detail=f"Reading the {rule.label} track…")
     meta = await rule.fetch_meta(job.ref.url)
     if meta.duration and meta.duration > ctx.settings.max_duration:
-        raise DownloadError(Reason.TOO_LONG, f"{meta.duration:.0f}s")
+        raise DownloadError(
+            Reason.TOO_LONG, f"{meta.duration:.0f}s", user_text=too_long_text(ctx.settings.max_duration)
+        )
     job.progress.set(Stage.STARTING, detail="Finding it on YouTube Music…")
     match = await matching.find(ctx.settings, ctx.downloader, via, meta)
     audio = await ctx.downloader.download_audio(via, match.url, workdir, job.progress)

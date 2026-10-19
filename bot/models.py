@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -46,14 +46,25 @@ USER_TEXT: dict[Reason, str] = {
     Reason.UNAVAILABLE: "This media is unavailable (removed or region-locked).",
     Reason.LOGIN_REQUIRED: "This media needs a signed-in account (age-restricted, members-only, or the site blocked guests).",
     Reason.BLOCKED: "The site blocked the download. Try again later.",
-    Reason.TOO_LARGE: "The file is larger than Telegram's 2 GB limit.",
-    Reason.TOO_LONG: "This is longer than the allowed maximum length.",
+    Reason.TOO_LARGE: "The file is larger than the bot's upload limit.",
+    Reason.TOO_LONG: "This is longer than the bot's length limit.",
     Reason.LIVE: "Live streams can't be downloaded.",
     Reason.NO_MEDIA: "No downloadable media found at this link.",
     Reason.DRM: "This is DRM-protected (for example a SoundCloud Go+ track or other paid content), so it can't be downloaded.",
     Reason.TIMEOUT: "The download took too long and was stopped.",
     Reason.FAILED: "The download failed.",
 }
+
+
+def too_long_text(limit: int) -> str:
+    if limit >= 3600 and limit % 1800 == 0:
+        span = f"{limit / 3600:g}-hour"
+    elif limit % 60 == 0:
+        span = f"{limit // 60}-minute"
+    else:
+        span = f"{limit}-second"
+    return f"This is longer than the {span} limit."
+
 
 # Failures caused by the link itself; everything else is reported to the admin.
 EXPECTED_REASONS = frozenset(
@@ -92,13 +103,11 @@ class MediaRef:
 
 @dataclass(slots=True)
 class MediaInfo:
-    id: str
     title: str
     webpage_url: str
     extractor: str = ""
     uploader: str | None = None  # channel / uploader display name
     duration: float | None = None
-    thumbnail: str | None = None  # URL
     upload_date: str | None = None  # YYYYMMDD
     is_live: bool = False
     track: str | None = None
@@ -112,13 +121,11 @@ class MediaInfo:
         if not artist and d.get("artists"):
             artist = ", ".join(d["artists"])
         return cls(
-            id=str(d.get("id") or ""),
             title=d.get("title") or d.get("fulltitle") or "Untitled",
             webpage_url=d.get("webpage_url") or d.get("original_url") or "",
             extractor=d.get("extractor_key") or d.get("extractor") or "",
             uploader=d.get("channel") or d.get("uploader") or d.get("creator"),
             duration=d.get("duration"),
-            thumbnail=d.get("thumbnail"),
             upload_date=d.get("upload_date") or d.get("release_date"),
             is_live=bool(d.get("is_live")) or d.get("live_status") in ("is_live", "is_upcoming"),
             track=d.get("track"),
@@ -132,7 +139,6 @@ class MediaInfo:
 class Quality:
     key: str  # format part of the cache key, e.g. "1080p" or "best"
     label: str  # button text, e.g. "1080p60 · 245 MB"
-    height: int | None
     format_spec: str  # value for yt-dlp -f
     size_bytes: int | None
 
@@ -167,7 +173,7 @@ class MediaItem:
 @dataclass(slots=True)
 class PostFiles:
     items: list[MediaItem]  # in post order
-    info: MediaInfo  # uploader = author, title = short title
+    info: MediaInfo  # uploader = author
     caption: str = ""  # post text, plain
 
 
@@ -175,7 +181,6 @@ class PostFiles:
 class TrackMeta:
     """A track known by its metadata only (Spotify); the audio is matched elsewhere."""
 
-    id: str
     url: str
     title: str
     artist: str  # display form, e.g. "The Weeknd, Ariana Grande"
@@ -211,9 +216,6 @@ class Progress:
     stage: Stage = Stage.QUEUED
     fraction: float | None = None  # 0..1, None when unknown
     detail: str = ""  # e.g. "52.1 MB of 120 MB · 3.4 MB/s"
-    version: int = field(default=0)
 
     def set(self, stage: Stage, fraction: float | None = None, detail: str = "") -> None:
-        if (stage, fraction, detail) != (self.stage, self.fraction, self.detail):
-            self.stage, self.fraction, self.detail = stage, fraction, detail
-            self.version += 1
+        self.stage, self.fraction, self.detail = stage, fraction, detail

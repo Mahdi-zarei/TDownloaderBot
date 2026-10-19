@@ -34,12 +34,11 @@ from .sources import SourceRule
 log = logging.getLogger(__name__)
 router = Router(name="tag_editor")
 
-TEXT_FIELDS = ("title", "artist", "album", "year")
 PROMPTS = {
     "title": "Send the new title.",
-    "artist": "Send the new artist, or - to clear it.",
-    "album": "Send the album name, or - to clear it.",
-    "year": "Send the year, e.g. 2021, or - to clear it.",
+    "artist": 'Send the new artist, or send "-" to clear it.',
+    "album": 'Send the album name, or send "-" to clear it.',
+    "year": 'Send the year, e.g. 2021, or send "-" to clear it.',
     "cover": "Send a photo for the cover, or pick one:",
 }
 COVER_LABELS = {
@@ -49,7 +48,6 @@ COVER_LABELS = {
     "custom": "Your image",
 }
 COVER_ACTIONS = {"c_sq": "square", "c_full": "full", "c_none": "none"}
-EXPIRED = "This editor expired"
 MAX_COVER_BYTES = 20 * 1024 * 1024
 _SUFFIX_RE = re.compile(r"\.[a-z0-9]{1,5}")
 
@@ -240,11 +238,14 @@ async def close_user(ctx: Ctx, user_id: int) -> int:
     return len(sessions)
 
 
+async def close_all(ctx: Ctx) -> None:
+    await asyncio.gather(*(_close(ctx, s, pipeline.RESTART_TEXT) for s in list(_sessions.values())))
+
+
 def expire_sessions(ctx: Ctx) -> None:
-    now = time.monotonic()
     for s in list(_sessions.values()):
-        if s.phase == "editing" and now - s.touched > ctx.settings.tag_editor_ttl:
-            ctx.spawn(_close(ctx, s, "Expired."), name="tag-expire")
+        if _expired(ctx, s):
+            ctx.spawn(_close(ctx, s, pipeline.EXPIRED_TEXT), name="tag-expire")
 
 
 def _expired(ctx: Ctx, s: TagSession) -> bool:
@@ -390,7 +391,7 @@ async def on_value(message: Message, ctx: Ctx, state: FSMContext) -> None:
             await _hint(ctx, s, message, f"Send the {field_name} as text.", None)
             return
         elif field_name == "year" and not re.fullmatch(r"\d{4}", value):
-            await _hint(ctx, s, message, "Send the year as 4 digits, e.g. 2021, or - to clear it.", None)
+            await _hint(ctx, s, message, 'Send the year as 4 digits, e.g. 2021, or send "-" to clear it.', None)
             return
         setattr(s.tags, field_name, value[:256])
 
@@ -404,11 +405,11 @@ async def on_value(message: Message, ctx: Ctx, state: FSMContext) -> None:
 async def on_button(cb: CallbackQuery, callback_data: TagCb, ctx: Ctx, state: FSMContext) -> None:
     s = _sessions.get(callback_data.t)
     if s is None or s.closed:
-        await pipeline.answer(cb, EXPIRED)
+        await pipeline.answer(cb, pipeline.EXPIRED_POPUP)
         return
     if _expired(ctx, s):
-        await pipeline.answer(cb, EXPIRED)
-        await _close(ctx, s, "Expired.")
+        await pipeline.answer(cb, pipeline.EXPIRED_POPUP)
+        await _close(ctx, s, pipeline.EXPIRED_TEXT)
         return
     if s.job is None:
         await pipeline.answer(cb, "One moment…")

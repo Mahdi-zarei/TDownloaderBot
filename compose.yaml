@@ -1,7 +1,7 @@
 # NovaBot: Telegram media downloader.
-# Both services share the host's network stack (network_mode: host), so the bot reaches the Bot API
-# server and any proxy you run on 127.0.0.1, and every listener is bound to loopback only:
-#   8081 Bot API, 8082 Bot API stats (healthcheck), 9091 metrics.
+# Every service shares the host's network stack (network_mode: host), so the bot reaches the Bot API
+# server, the WARP proxy and any proxy you run on 127.0.0.1, and every listener is bound to loopback only:
+#   8081 Bot API, 8082 Bot API stats (healthcheck), 9091 metrics, 1081 WARP SOCKS5 (WARP_PORT).
 
 x-logging: &logging
   driver: json-file
@@ -45,4 +45,19 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+    logging: *logging
+
+  # Built-in Cloudflare WARP egress for EGRESS_*=warp. Opt-in: COMPOSE_PROFILES=warp in .env.
+  # Healthcheck is defined in warp/Dockerfile.
+  warp:
+    build: ./warp
+    profiles: [warp]
+    network_mode: host
+    init: true
+    restart: unless-stopped
+    environment:
+      SOCKS_ADDR: 127.0.0.1:${WARP_PORT:-1081}
+      WG_RESOLVE_STRATEGY: ${WARP_RESOLVE_STRATEGY:-}
+    volumes:
+      - ./warp-data:/var/lib/wgcf
     logging: *logging

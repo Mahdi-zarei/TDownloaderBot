@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+import re
 import shutil
 import time
 
@@ -68,7 +69,10 @@ async def _selftest_header(ctx: Ctx, egresses: list[str]) -> str:
     ips = await asyncio.gather(*(ctx.downloader.egress_ip(e) for e in egresses), return_exceptions=True)
     for egress, ip in zip(egresses, ips):
         shown = html.escape(ip) if isinstance(ip, str) else f"error ({html.escape(type(ip).__name__)})"
-        lines.append(f"{html.escape(Settings.egress_label(egress))}: <code>{shown}</code>")
+        line = f"{html.escape(Settings.egress_label(egress))}: <code>{shown}</code>"
+        if egress == "warp" and shown.startswith("error"):
+            line += "\n    is the warp service running? It needs <code>COMPOSE_PROFILES=warp</code> in .env"
+        lines.append(line)
     for rule in ctx.sources.rules:
         if rule.cookies is not None:
             problem = rule.cookies_problem()
@@ -146,7 +150,7 @@ async def _spotify_row(ctx: Ctx) -> str:
 async def _resolve_user(ctx: Ctx, command: CommandObject) -> int | None:
     """A numeric id as given (the user may not have used the bot yet), or a known @username."""
     arg = (command.args or "").strip()
-    if arg.lstrip("-").isdigit():
+    if re.fullmatch(r"-?\d+", arg):
         return int(arg)
     row = await ctx.db.find_user(arg) if arg else None
     return row["tg_id"] if row else None

@@ -145,7 +145,7 @@ def fit(lines: list[str], more: list[str]) -> list[str]:
     return lines
 
 
-async def show(ctx: Ctx, cb: CallbackQuery, text: str, markup: InlineKeyboardMarkup | None, note: str | None = None) -> None:
+async def _show_cb(ctx: Ctx, cb: CallbackQuery, text: str, markup: InlineKeyboardMarkup | None, note: str | None = None) -> None:
     if isinstance(cb.message, Message):
         await pipeline.edit_message(ctx.bot, cb.message.chat.id, cb.message.message_id, text, markup)
     await pipeline.answer(cb, note)
@@ -214,7 +214,7 @@ async def cmd_stats(message: Message, command: CommandObject, ctx: Ctx) -> None:
 
 @router.callback_query(StatsCb.filter())
 async def on_stats(cb: CallbackQuery, callback_data: StatsCb, ctx: Ctx) -> None:
-    await show(ctx, cb, *await _stats_view(ctx, callback_data.p if callback_data.p in PERIODS else "today"))
+    await _show_cb(ctx, cb, *await _stats_view(ctx, callback_data.p if callback_data.p in PERIODS else "today"))
 
 
 # /users
@@ -249,7 +249,7 @@ async def cmd_users(message: Message, command: CommandObject, ctx: Ctx) -> None:
 @router.callback_query(UsersCb.filter())
 async def on_users(cb: CallbackQuery, callback_data: UsersCb, ctx: Ctx) -> None:
     sort = callback_data.sort if callback_data.sort in USER_SORTS else "recent"
-    await show(ctx, cb, *await _users_view(ctx, sort, max(0, callback_data.page)))
+    await _show_cb(ctx, cb, *await _users_view(ctx, sort, max(0, callback_data.page)))
 
 
 # /user
@@ -342,7 +342,7 @@ async def on_user(cb: CallbackQuery, callback_data: UserCb, ctx: Ctx) -> None:
     if view is None:
         await pipeline.answer(cb, "No such user.")
         return
-    await show(ctx, cb, *view, note=note)
+    await _show_cb(ctx, cb, *view, note=note)
 
 
 # /jobs
@@ -380,7 +380,7 @@ async def on_jobs(cb: CallbackQuery, callback_data: JobsCb, ctx: Ctx) -> None:
     if callback_data.a == "cancel":
         note = f"Cancelling #{callback_data.id}" if ctx.jobs.cancel(callback_data.id) else "That job already finished"
         await asyncio.sleep(0.5)
-    await show(ctx, cb, *await _jobs_view(ctx), note=note)
+    await _show_cb(ctx, cb, *await _jobs_view(ctx), note=note)
 
 
 # /failures
@@ -389,7 +389,7 @@ async def on_jobs(cb: CallbackQuery, callback_data: JobsCb, ctx: Ctx) -> None:
 @router.message(Command("failures"))
 async def cmd_failures(message: Message, command: CommandObject, ctx: Ctx) -> None:
     arg = (command.args or "").strip()
-    rows = await ctx.db.recent_failures(min(max(int(arg), 1), 30) if arg.isdigit() else 10)
+    rows = await ctx.db.recent_failures(min(max(int(arg), 1), 30) if re.fullmatch(r"\d+", arg) else 10)
     if not rows:
         await message.answer("No failures recorded. 🎉")
         return
@@ -427,7 +427,7 @@ async def _reply_link(message: Message, ctx: Ctx, job_id: int) -> None:
 @router.message(Command("link"))
 async def cmd_link(message: Message, command: CommandObject, ctx: Ctx) -> None:
     arg = (command.args or "").strip().lstrip("#")
-    if not arg.isdigit():
+    if not re.fullmatch(r"\d+", arg):
         await message.reply("Usage: /link &lt;request id&gt; · shows the link of a failed request (see /failures)")
         return
     await _reply_link(message, ctx, int(arg))
@@ -475,7 +475,9 @@ _broadcast_lock = asyncio.Lock()
 
 
 async def _recipients(ctx: Ctx) -> list[int]:
-    return [uid for uid in await ctx.db.broadcast_ids() if uid != ctx.settings.admin_id]
+    return [
+        uid for uid in await ctx.db.broadcast_ids() if uid != ctx.settings.admin_id and ctx.settings.is_allowed(uid)
+    ]
 
 
 @router.message(Command("broadcast"))
@@ -510,16 +512,16 @@ async def cmd_broadcast(message: Message, command: CommandObject, ctx: Ctx) -> N
 async def on_broadcast(cb: CallbackQuery, callback_data: BroadcastCb, ctx: Ctx) -> None:
     b = _broadcasts.pop(callback_data.t, None)
     if b is None or time.monotonic() - b.created > BROADCAST_TTL:
-        await show(ctx, cb, "This broadcast expired. Send /broadcast again.", None)
+        await _show_cb(ctx, cb, "This broadcast expired. Send /broadcast again.", None)
         return
     if callback_data.a != "send":
-        await show(ctx, cb, "Broadcast cancelled.", None)
+        await _show_cb(ctx, cb, "Broadcast cancelled.", None)
         return
     if _broadcast_lock.locked():
         _broadcasts[callback_data.t] = b
         await pipeline.answer(cb, "Another broadcast is still sending.", alert=True)
         return
-    await show(ctx, cb, "📣 Sending…", None)
+    await _show_cb(ctx, cb, "📣 Sending…", None)
     ctx.spawn(_run_broadcast(ctx, b), name="broadcast")
 
 

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import re
+import socket
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -193,10 +195,26 @@ def _spotify(url: str) -> MediaRef | None:
     )
 
 
+def _internal(host: str) -> bool:
+    if host == "localhost" or host.endswith((".localhost", ".local", ".internal", ".home.arpa")):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        try:
+            ip = ipaddress.ip_address(socket.inet_aton(host))  # also 127.1, 2130706433, 0x7f.1
+        except (OSError, ValueError):
+            return False
+    return not ip.is_global
+
+
 def _generic(url: str) -> MediaRef | None:
     parts, host, _ = _split(url)
     if parts.scheme not in ("http", "https") or not host:
         return None
+    # Host networking: links to local services (the Bot API, metrics, cloud metadata) must not be fetched.
+    if _internal((parts.hostname or "").rstrip(".")):
+        raise DownloadError(Reason.UNSUPPORTED, url)
     return MediaRef("generic", hashlib.sha1(url.encode()).hexdigest()[:16], url)
 
 
@@ -265,7 +283,7 @@ class Sources:
     def match(self, url: str) -> tuple[SourceRule, MediaRef]:
         """Raises DownloadError(UNSUPPORTED | PLAYLIST) for links that are out of scope."""
         url = url.strip()
-        if "://" not in url:
+        if not url.lower().startswith(("http://", "https://")):
             url = "https://" + url
         for rule in self.rules:
             ref = rule.parse(url)

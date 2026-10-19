@@ -36,6 +36,7 @@ from .models import (
     Reason,
     Stage,
     VideoFile,
+    too_long_text,
 )
 from .sources import CookiesPolicy, Mode, SourceRule, Tool
 
@@ -50,7 +51,6 @@ _PHOTO_EXTS = frozenset({"jpg", "jpeg", "png", "webp", "heic"})
 _VIDEO_EXTS = frozenset({"mp4", "mov", "webm", "mkv"})
 _AUDIO_EXTS = frozenset({"m4a", "mp3", "aac", "ogg", "oga", "opus", "wav", "flac", "weba", "mka"})
 _SAFE_FORMAT_ID = re.compile(r"[\w.\-]+")
-_SHORTCODE = re.compile(r"/(?:p|reels?|tv)/([\w-]+)")
 
 _FASTSTART = "Merger+ffmpeg_o:-movflags +faststart"
 _AUDIO_FORMAT = "ba[ext=m4a]/ba[acodec^=mp4a]/ba[ext=mp3]/ba/b"
@@ -148,7 +148,6 @@ class SelftestResult:
     ok: bool
     seconds: float
     reason: str = ""  # Reason value on failure
-    detail: str = ""  # last lines of tool output on failure
 
 
 class _ToolError(DownloadError):
@@ -215,17 +214,8 @@ def _lead_int(name: str) -> int:
     return int(m[0]) if m else 1 << 30
 
 
-def _tail(text: str, n: int) -> str:
-    return "\n".join(text.strip().splitlines()[-n:])
-
-
 def _truncate(text: str, n: int) -> str:
     return text if len(text) <= n else text[: n - 1].rstrip() + "…"
-
-
-def _yyyymmdd(value: Any) -> str | None:
-    m = re.match(r"(\d{4})-?(\d{2})-?(\d{2})", str(value or ""))
-    return "".join(m.groups()) if m else None
 
 
 def _read_lines(path: Path) -> list[str]:
@@ -342,7 +332,7 @@ def _media_outputs(workdir: Path) -> list[str]:
 
 def _read_info(workdir: Path, url: str) -> MediaInfo:
     data = _load_json(workdir / "media.info.json")
-    info = MediaInfo.from_ytdlp(data) if data else MediaInfo(id="", title="Untitled", webpage_url=url)
+    info = MediaInfo.from_ytdlp(data) if data else MediaInfo(title="Untitled", webpage_url=url)
     info.webpage_url = info.webpage_url or url
     return info
 
@@ -361,21 +351,9 @@ def _first_json(folder: Path) -> dict[str, Any]:
     return {}
 
 
-def _post_files(
-    rule: SourceRule, url: str, items: list[MediaItem], *, caption: Any, uploader: Any, date: Any, media_id: Any
-) -> PostFiles:
-    text = str(caption or "").strip()
-    first = next((line.strip() for line in text.splitlines() if line.strip()), "")
-    m = _SHORTCODE.search(url)
-    info = MediaInfo(
-        id=m[1] if m else str(media_id or ""),
-        title=_truncate(first, 64) or f"{rule.label} post",
-        webpage_url=url,
-        extractor=rule.label,
-        uploader=str(uploader) if uploader else None,
-        upload_date=_yyyymmdd(date),
-    )
-    return PostFiles(items=items, info=info, caption=text)
+def _post_files(rule: SourceRule, url: str, items: list[MediaItem], *, caption: Any, uploader: Any) -> PostFiles:
+    info = MediaInfo(title=f"{rule.label} post", webpage_url=url, uploader=str(uploader) if uploader else None)
+    return PostFiles(items=items, info=info, caption=str(caption or "").strip())
 
 
 def _most_informative(errors: list[tuple[Tool, DownloadError]]) -> DownloadError:
@@ -468,7 +446,7 @@ def _quality(height: int, group: list[dict[str, Any]], audio: dict[str, Any] | N
     else:
         chain.append(f"bv*[height={height}]+ba[acodec^=mp4a]")
     chain += [f"bv*[height={height}]+ba", f"b[height<={height}]"]
-    return Quality(key=f"{height}p", label=label, height=height, format_spec="/".join(chain), size_bytes=size)
+    return Quality(key=f"{height}p", label=label, format_spec="/".join(chain), size_bytes=size)
 
 
 def _single_entry(d: dict[str, Any]) -> dict[str, Any]:
@@ -752,8 +730,8 @@ class Downloader:
     async def selftest(self, rule: SourceRule, url: str, egress: str, workdir: Path) -> SelftestResult:
         started = time.monotonic()
 
-        def result(ok: bool, reason: str = "", detail: str = "") -> SelftestResult:
-            return SelftestResult(rule.name, egress, ok, round(time.monotonic() - started, 1), reason, detail)
+        def result(ok: bool, reason: str = "") -> SelftestResult:
+            return SelftestResult(rule.name, egress, ok, round(time.monotonic() - started, 1), reason)
 
         try:
             async with asyncio.timeout(_SELFTEST_TIMEOUT):
@@ -768,12 +746,12 @@ class Downloader:
                         rule, url, workdir, Progress(), args, egress=egress, deadline=deadline, guard=False
                     )
         except TimeoutError:
-            return result(False, Reason.TIMEOUT.value, f"no result within {_SELFTEST_TIMEOUT:.0f} s")
+            return result(False, Reason.TIMEOUT.value)
         except DownloadError as e:
-            return result(False, e.reason.value, _tail(e.detail, 5))
-        except Exception as e:
-            log.exception("selftest %s via %s crashed", rule.name, egress)
-            return result(False, Reason.FAILED.value, repr(e))
+            return result(False, e.reason.value)
+        except Exception:
+            log.exception("selftest %s via %s crashed", rule.name, self.settings.egress_label(egress))
+            return result(False, Reason.FAILED.value)
         return result(True)
 
     async def egress_ip(self, egress: str) -> str:
@@ -895,7 +873,7 @@ class Downloader:
         return _ToolError(
             Reason.TOO_LONG,
             f"duration {duration:.0f}s > {limit}s\n{detail}".strip(),
-            user_text=f"This is longer than the {limit / 3600:g}-hour limit.",
+            user_text=too_long_text(limit),
         )
 
     def _check_size(self, path: Path) -> None:
@@ -958,7 +936,7 @@ class Downloader:
                 by_height.setdefault(h, []).append(f)
         if not by_height:
             size, exact = _size(d, duration)  # top level describes yt-dlp's own default pick
-            best = Quality("best", "Best quality" + _size_label(size, exact), None, "bv*+ba/b", size)
+            best = Quality("best", "Best quality" + _size_label(size, exact), "bv*+ba/b", size)
             return [best] if size is None or size <= limit else []
         audio = _best_audio(formats)
         out: list[Quality] = []
@@ -1131,10 +1109,7 @@ class Downloader:
             if run.code:
                 log.warning("gallery-dl exited %d with %d item(s) for a %s post", run.code, len(items), rule.name)
             meta = _first_json(folder)
-            return _post_files(
-                rule, url, items, caption=meta.get("description"), uploader=meta.get("username"),
-                date=meta.get("date"), media_id=meta.get("post_shortcode") or meta.get("shortcode"),
-            )
+            return _post_files(rule, url, items, caption=meta.get("description"), uploader=meta.get("username"))
 
         progress.set(Stage.DOWNLOADING)
         return await self._attempts(rule, workdir, attempt)
@@ -1166,7 +1141,7 @@ class Downloader:
             "-f", "bv*+ba/b", "--merge-output-format", "mp4", "--postprocessor-args", _FASTSTART,
             "--ignore-errors", "--playlist-items", "1:20",
             "-o", f"{_tmpl(folder)}/%(playlist_index|0)s_%(id)s.%(ext)s",
-            "--print-to-file", "after_move:%(.{id,description,channel,uploader,upload_date})j", _tmpl(meta_txt),
+            "--print-to-file", "after_move:%(.{description,channel,uploader})j", _tmpl(meta_txt),
         ]
         files = await self._ytdlp_fetch(
             rule, url, workdir, progress, args, egress=egress, deadline=deadline, guard=False, playlist=True
@@ -1177,6 +1152,5 @@ class Downloader:
         metas = [m for m in map(_parse_json, _read_lines(meta_txt)) if m]
         meta = next((m for m in metas if m.get("description")), metas[0] if metas else {})
         return _post_files(
-            rule, url, items, caption=meta.get("description"), uploader=meta.get("channel") or meta.get("uploader"),
-            date=meta.get("upload_date"), media_id=meta.get("id"),
+            rule, url, items, caption=meta.get("description"), uploader=meta.get("channel") or meta.get("uploader")
         )

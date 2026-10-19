@@ -35,7 +35,6 @@ class Match:
     url: str
     title: str
     channel: str
-    duration: float | None
     via: str  # "YouTube Music" or "YouTube"
     score: float
 
@@ -92,7 +91,7 @@ def pick(meta: TrackMeta, candidates: list[_Candidate]) -> Match | None:
         if title < MIN_TITLE or total < MIN_SCORE or (best and total <= best.score):
             continue
         host = "music.youtube.com" if c.via == "YouTube Music" else "www.youtube.com"
-        best = Match(f"https://{host}/watch?v={c.video_id}", c.title, c.channel, c.duration, c.via, total)
+        best = Match(f"https://{host}/watch?v={c.video_id}", c.title, c.channel, c.via, total)
     return best
 
 
@@ -141,8 +140,9 @@ async def find(settings: Settings, downloader: Downloader, rule: SourceRule, met
             log.info("track matched via %s (score %.2f)", match.via, match.score)
             return match
         tried.append(f"{via}: {len(candidates)} result(s), none close enough")
+    length = f"{meta.duration:.0f}s" if meta.duration else "unknown length"
     raise DownloadError(
         Reason.NO_MEDIA,
-        f"track of {meta.duration}s: " + "; ".join(tried),  # no title or artist: what users play stays private
-        user_text="Couldn't find this track on YouTube Music.",
+        f"track of {length}: " + "; ".join(tried),  # no title or artist: what users play stays private
+        user_text="Couldn't find a matching song on YouTube Music or YouTube.",
     )

@@ -18,7 +18,6 @@ log = logging.getLogger(__name__)
 # gets a tiny "open in app" page without them.
 USER_AGENT = "TelegramBot (like TwitterBot)"
 TIMEOUT = aiohttp.ClientTimeout(total=30)
-TRACK_ID = re.compile(r"/track/([0-9A-Za-z]{22})")
 COVER_MAX_BYTES = 10 * 1024 * 1024
 
 
@@ -60,11 +59,8 @@ def parse_track_page(html: str, url: str) -> TrackMeta:
     release = first("music:release_date")
     year = release[:4] if re.match(r"\d{4}", release) else (parts[-1] if parts and re.fullmatch(r"\d{4}", parts[-1]) else "")
     duration = float(d) if (d := first("music:duration")).isdigit() else None
-    canonical = first("og:url") or url
-    m = TRACK_ID.search(canonical) or TRACK_ID.search(url)
     return TrackMeta(
-        id=m[1] if m else "",
-        url=canonical,
+        url=first("og:url") or url,
         title=title,
         artist=artist,
         album=album,

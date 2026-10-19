@@ -22,11 +22,14 @@ class Settings(BaseSettings):
     youtube_cookies: Path = Path("/secrets/youtube-cookies.txt")
     instagram_cookies: Path = Path("/secrets/instagram-cookies.txt")
 
-    # Per-source egress: "direct", or the URL of a proxy you run (socks5h://, socks5://, http://).
+    # Per-source egress: "direct", "warp" (the built-in WARP service), or the URL of a proxy you run
+    # (socks5h://, socks5://, http://).
     egress_youtube: str = "direct"
     egress_instagram: str = "direct"
     egress_soundcloud: str = "direct"
     egress_generic: str = "direct"
+    # Loopback port of the warp service's SOCKS5 proxy; compose reads the same WARP_PORT.
+    warp_port: int = 1081
 
     global_downloads: int = 2
     youtube_concurrency: int = 2
@@ -60,12 +63,19 @@ class Settings(BaseSettings):
     def allowed_user_ids(self) -> frozenset[int]:
         return frozenset(int(x) for x in self.allowed_users.replace(" ", "").split(",") if x)
 
+    @field_validator("allowed_users")
+    @classmethod
+    def _check_allowed_users(cls, v: str) -> str:
+        if not all(re.fullmatch(r"\d*", x.strip()) for x in v.split(",")):
+            raise ValueError("must be comma-separated numeric user ids")
+        return v
+
     @field_validator("egress_youtube", "egress_instagram", "egress_soundcloud", "egress_generic")
     @classmethod
     def _check_egress(cls, v: str) -> str:
         v = v.strip()
-        if v and v != "direct" and "://" not in v:
-            raise ValueError(f"must be 'direct' or a proxy URL such as socks5h://127.0.0.1:1080, got {v!r}")
+        if v and v not in ("direct", "warp") and "://" not in v:
+            raise ValueError(f"must be 'direct', 'warp' or a proxy URL such as socks5h://127.0.0.1:1080, got {v!r}")
         return v or "direct"
 
     @property
@@ -74,14 +84,20 @@ class Settings(BaseSettings):
         used = (self.egress_youtube, self.egress_instagram, self.egress_soundcloud, self.egress_generic)
         return list(dict.fromkeys(["direct", *(e.strip() for e in used if self.resolve_egress(e))]))
 
+    @property
+    def warp_proxy(self) -> str:
+        return f"socks5h://127.0.0.1:{self.warp_port}"
+
     def resolve_egress(self, egress: str) -> str | None:
         """Proxy URL for an egress setting; None means direct."""
         egress = egress.strip()
         if not egress or egress == "direct":
             return None
+        if egress == "warp":
+            return self.warp_proxy
         if "://" in egress:
             return egress
-        raise ValueError(f"egress {egress!r} must be 'direct' or a proxy URL such as socks5h://127.0.0.1:1080")
+        raise ValueError(f"egress {egress!r} must be 'direct', 'warp' or a proxy URL such as socks5h://127.0.0.1:1080")
 
     @staticmethod
     def egress_label(egress: str) -> str:

@@ -49,9 +49,6 @@ class JobManager:
         self._source_sems = {name: asyncio.Semaphore(n) for name, n in source_limits.items() if n}
         self._jobs: dict[int, Job] = {}
 
-    def get(self, job_id: int) -> Job | None:
-        return self._jobs.get(job_id)
-
     def all(self) -> list[Job]:
         return list(self._jobs.values())
 
@@ -79,8 +76,14 @@ class JobManager:
         self._jobs[job.id] = job
         job.task = asyncio.create_task(fn(job), name=f"job-{job.id}")
         # A done-callback also fires for a task cancelled before it ever started running.
-        job.task.add_done_callback(lambda _: self._jobs.pop(job.id, None))
+        job.task.add_done_callback(lambda _: self._forget(job))
         return job.task
+
+    def _forget(self, job: Job) -> None:
+        self._jobs.pop(job.id, None)
+        # Only tasks of jobs still in _jobs can hold or wait on a user's semaphore, so with none left it is idle.
+        if not self.user_jobs(job.user_id):
+            self._user_sems.pop(job.user_id, None)
 
     @asynccontextmanager
     async def slot(self, job: Job) -> AsyncIterator[None]:

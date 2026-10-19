@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -150,7 +151,7 @@ class DB:
         q = query.strip().lstrip("@")
         if not q:
             return None
-        if q.lstrip("-").isdigit():
+        if re.fullmatch(r"-?\d+", q):
             rows = await self._rows("SELECT * FROM users WHERE tg_id = ?", int(q))
         else:
             rows = await self._rows("SELECT * FROM users WHERE lower(username) = lower(?)", q)

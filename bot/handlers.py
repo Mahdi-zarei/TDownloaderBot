@@ -29,8 +29,9 @@ from aiogram.types import (
 )
 
 from . import pipeline, tag_editor
+from .admin import stop_user_work
 from .context import Ctx
-from .models import USER_TEXT, DownloadError, MediaRef, Probe, Quality, Reason
+from .models import DownloadError, MediaRef, Probe, Quality
 from .sources import Mode, SourceRule
 
 log = logging.getLogger(__name__)
@@ -52,7 +53,6 @@ HELP_TEXT = (
     "/cancel stops your downloads."
 )
 HINT_TEXT = "Send me a link from YouTube, Instagram, SoundCloud, Spotify or another video site. /help"
-EXPIRED_TEXT = "Expired — send the link again."
 
 _URL_RE = re.compile(r"(?:https?://|www\.)[^\s<>\"']+", re.IGNORECASE)
 _SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.IGNORECASE)
@@ -73,13 +73,13 @@ class AccessMiddleware(BaseMiddleware):
         if user is None or chat is None or chat.type != ChatType.PRIVATE:
             return None
         ctx: Ctx = data["ctx"]
-        if await ctx.db.touch_user(user.id, user.username, user.full_name):
-            return None
         if not ctx.settings.is_allowed(user.id):
             if isinstance(event, Message):
                 await event.answer("This bot is private.")
             elif isinstance(event, CallbackQuery):
                 await pipeline.answer(event, "This bot is private.", alert=True)
+            return None
+        if await ctx.db.touch_user(user.id, user.username, user.full_name):
             return None
         return await handler(event, data)
 
@@ -111,11 +111,9 @@ async def cmd_help(message: Message) -> None:
 
 @router.message(Command("cancel"))
 async def cmd_cancel(message: Message, ctx: Ctx, state: FSMContext, event_from_user: User) -> None:
-    editors = await tag_editor.close_user(ctx, event_from_user.id)
-    jobs = ctx.jobs.cancel_user(event_from_user.id)
+    n = await stop_user_work(ctx, event_from_user.id)
     await state.clear()
-    n = editors + jobs
-    await message.answer(f"✖ Cancelled {n} job{'s' if n != 1 else ''}." if n else "Nothing to cancel.")
+    await message.answer(f"✖ Cancelled {n} download{'s' if n != 1 else ''}." if n else "Nothing to cancel.")
 
 
 @router.callback_query(pipeline.CancelJob.filter())
@@ -125,7 +123,7 @@ async def on_cancel_job(
     if ctx.jobs.cancel(callback_data.job_id, user_id=event_from_user.id):
         await pipeline.answer(cb, "Cancelling…")
     else:
-        await pipeline.answer(cb, "This job has already finished.")
+        await pipeline.answer(cb, "This download has already finished.")
 
 
 # Links
@@ -169,7 +167,7 @@ async def _handle_link(ctx: Ctx, message: Message, user_id: int, url: str, *, mu
             rule, ref = ctx.sources.match(url)
         except DownloadError as e:
             prefix = f"<code>{html.escape(pipeline.truncate(url, 80))}</code>: " if multi else ""
-            await message.reply(prefix + html.escape(e.user_text))
+            await message.reply(prefix + pipeline.failure_text(e))
             return
         if rule.mode is Mode.PICK:
             await _open_picker(ctx, message, user_id, rule, ref)
@@ -235,10 +233,6 @@ async def _open_picker(ctx: Ctx, message: Message, user_id: int, rule: SourceRul
     chat_id = message.chat.id
     try:
         probe = await ctx.downloader.probe(rule, ref.url)
-        if probe.info.is_live:
-            raise DownloadError(Reason.LIVE, ref.url)
-        if probe.info.duration and probe.info.duration > ctx.settings.max_duration:
-            raise DownloadError(Reason.TOO_LONG, f"{probe.info.duration:.0f}s")
     except Exception as e:
         known = e if isinstance(e, DownloadError) else None
         text = pipeline.failure_text(known) if known else pipeline.GENERIC_FAILURE
@@ -251,11 +245,6 @@ async def _open_picker(ctx: Ctx, message: Message, user_id: int, rule: SourceRul
                 user=user_id, source=rule.name, job=job_id, link=f"/link_{job_id}" if job_id else None,
                 cookies=rule.cookies_problem(),
             )
-        return
-    if not probe.qualities and not probe.has_audio:
-        await pipeline.edit_message(
-            ctx.bot, chat_id, status.message_id, "⚠️ " + html.escape(USER_TEXT[Reason.NO_MEDIA])
-        )
         return
 
     token = secrets.token_urlsafe(6)
@@ -285,7 +274,7 @@ async def _picker_view(ctx: Ctx, token: str, p: Picker) -> tuple[str, InlineKeyb
     rows = [videos[i : i + 2] for i in range(0, len(videos), 2)]
     if p.probe.has_audio:
         rows.append([button(bolt("audio") + "🎵 Audio", "a"), button("🎛 Audio · custom tags", "c")])
-    rows.append([button("✖", "x")])
+    rows.append([button("✖ Cancel", "x")])
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -295,7 +284,7 @@ def _picker_expired(ctx: Ctx, p: Picker) -> bool:
 
 async def _expire_picker(ctx: Ctx, token: str) -> None:
     if (p := _pickers.pop(token, None)) is not None:
-        await pipeline.edit_message(ctx.bot, p.chat_id, p.message_id, EXPIRED_TEXT)
+        await pipeline.edit_message(ctx.bot, p.chat_id, p.message_id, pipeline.EXPIRED_TEXT)
 
 
 async def expire_pickers(ctx: Ctx) -> None:
@@ -309,7 +298,7 @@ async def on_pick(cb: CallbackQuery, callback_data: PickCb, ctx: Ctx, state: FSM
     token, action = callback_data.t, callback_data.a
     p = _pickers.get(token)
     if p is None or _picker_expired(ctx, p):
-        await pipeline.answer(cb, EXPIRED_TEXT)
+        await pipeline.answer(cb, pipeline.EXPIRED_POPUP)
         await _expire_picker(ctx, token)
         return
     if action == "x":
