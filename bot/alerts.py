@@ -22,7 +22,7 @@ _CONTEXT_ORDER = ("user", "source", "job", "link")
 # Privacy: what users download stays out of alerts and logs. Links, search queries and the media id
 # yt-dlp prints after its extractor tag ("[youtube] dQw4w9WgXcQ: ...") are masked.
 _URL = re.compile(r"\bhttps?://\S+", re.IGNORECASE)
-_SEARCH = re.compile(r"'ytsearch\d*:[^']*'|\bytsearch\d*:\S+", re.IGNORECASE)
+_SEARCH = re.compile(r"'(?:yt|sc)search\d*:[^']*'|\b(?:yt|sc)search\d*:\S+", re.IGNORECASE)
 _TOOL_TAGS = "download|info|debug|Merger|ExtractAudio|Fixup\\w*|VideoRemuxer|VideoConvertor|ThumbnailsConvertor|Metadata|MoveFiles"
 _EXTRACTOR_ID = re.compile(rf"(\[(?!(?:{_TOOL_TAGS})\])[\w:.+-]+\]) [^\s:\[\]]+:(?=\s|$)")
 

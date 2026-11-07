@@ -8,6 +8,8 @@ in the quality you pick, or audio with tags and cover art.
 - Quality picker with file sizes; audio as tagged M4A, with an editor for your own tags and cover.
 - Instagram reels, photo posts and carousels; Spotify tracks matched to the same song on YouTube Music.
 - Spotify albums and playlists: pick the tracks you want, or download them all.
+- Search by name: type a song or video name to search YouTube Music songs, YouTube or SoundCloud, then tap
+  results to get them.
 - Repeat requests are answered instantly from a cache.
 - Per-source egress: direct, built-in Cloudflare WARP, or your own SOCKS5/HTTP proxy.
 - Admin tools (stats, users, bans, broadcast, failure log, `/selftest`) that don't show the admin what
@@ -90,8 +92,8 @@ them after a bot check.
 
 ## Commands
 
-Users send links (up to 5 per message) and have `/start`, `/help` and `/cancel`. Only `ADMIN_ID` can use
-these:
+Users send links (up to 5 per message) and have `/start`, `/help`, `/search` and `/cancel`. Any text without a
+link is a search. Only `ADMIN_ID` can use these:
 
 | Command | What it does |
 | --- | --- |
@@ -114,6 +116,13 @@ the first 100). Tap tracks to pick them, or download all. The tracks then arrive
 download (cached, counted and limited like any other), with a summary of what could not be matched at the end.
 One list per user downloads at a time, and `/cancel` stops it. Private playlists, Liked Songs, artists and
 podcasts aren't supported.
+
+**Search:** text without a link (or `/search <name>`) is searched on one of three tabs: 🎵 Songs (YouTube Music,
+sent straight as audio), ▶️ YouTube (opens the quality picker) and ☁️ SoundCloud (audio). Each tab shows up to 15
+results and is searched the first time it's opened, through that source's egress. Tapped results run like links
+the user sent, and the results stay open so several can be picked. Each user runs one search at a time. Spotify
+isn't searched: its Web API needs a registered app. Song search covers the same catalog, since Spotify tracks are
+downloaded from YouTube Music anyway. Queries aren't stored, and logs and alerts mask them.
 
 ## Updating
 

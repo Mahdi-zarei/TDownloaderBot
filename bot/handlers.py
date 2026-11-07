@@ -38,13 +38,15 @@ log = logging.getLogger(__name__)
 router = Router(name="user")
 
 START_TEXT = (
-    "👋 Send me a link and I'll send the file back.\n\n"
+    "👋 Send me a link and I'll send the file back, or type a song or video name to search.\n\n"
     "Works with YouTube, Instagram, SoundCloud, Spotify tracks, albums and playlists, and most other video sites. "
     "/help for details."
 )
 HELP_TEXT = (
     "<b>How it works</b>\n"
     "Send a link, or several in one message.\n\n"
+    "• <b>Search</b>: type a song or video name (or /search name), choose 🎵 Songs, ▶️ YouTube or "
+    "☁️ SoundCloud, and tap results to get them.\n"
     "• <b>YouTube</b> and other sites: pick a quality, 🎵 Audio, or 🎛 Audio · custom tags "
     "to set title, artist, album, year, cover and format.\n"
     "• <b>Instagram</b>: every photo and video of the post, reel or story.\n"
@@ -54,7 +56,10 @@ HELP_TEXT = (
     "⚡ marks formats that arrive instantly from cache.\n"
     "/cancel stops your downloads."
 )
-HINT_TEXT = "Send me a link from YouTube, Instagram, SoundCloud, Spotify or another video site. /help"
+HINT_TEXT = (
+    "Send me a link from YouTube, Instagram, SoundCloud, Spotify or another video site, "
+    "or type a song or video name to search. /help"
+)
 
 _URL_RE = re.compile(r"(?:https?://|www\.)[^\s<>\"']+", re.IGNORECASE)
 _SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.IGNORECASE)
@@ -160,39 +165,46 @@ async def on_message(message: Message, ctx: Ctx, event_from_user: User) -> None:
         await message.reply(f"Only the first {limit} links are handled.")
         urls = urls[:limit]
     for url in urls:
-        ctx.spawn(_handle_link(ctx, message, event_from_user.id, url, multi=len(urls) > 1), name="link")
+        label = f"<code>{html.escape(pipeline.truncate(url, 80))}</code>: " if len(urls) > 1 else ""
+        ctx.spawn(
+            start_url(ctx, user_id=event_from_user.id, chat_id=message.chat.id, reply_to=message.message_id,
+                      url=url, label=label),
+            name="link",
+        )
 
 
-async def _handle_link(ctx: Ctx, message: Message, user_id: int, url: str, *, multi: bool) -> None:
+async def start_url(
+    ctx: Ctx, *, user_id: int, chat_id: int, reply_to: int, url: str, audio: bool = False, label: str = ""
+) -> None:
+    """Handles a link as if the user sent it. `audio` skips the quality picker; `label` prefixes a refusal."""
+
+    async def reply(text: str) -> None:
+        await ctx.bot.send_message(chat_id, text, reply_parameters=pipeline.reply_params(reply_to))
+
     try:
         try:
             rule, ref = ctx.sources.match(url)
         except DownloadError as e:
-            prefix = f"<code>{html.escape(pipeline.truncate(url, 80))}</code>: " if multi else ""
-            await message.reply(prefix + pipeline.failure_text(e))
-            return
-        if rule.mode is Mode.PICK:
-            await _open_picker(ctx, message, user_id, rule, ref)
+            await reply(label + pipeline.failure_text(e))
             return
         if rule.mode is Mode.LIST:
-            await playlist.open_list(ctx, message, user_id, rule, ref)
+            await playlist.open_list(ctx, rule, ref, user_id=user_id, chat_id=chat_id, reply_to=reply_to)
             return
-        fmt, flow = pipeline.FLOWS[rule.mode]
-        chat_id = message.chat.id
-        if await pipeline.send_from_cache(
-            ctx, rule, ref, fmt, user_id=user_id, chat_id=chat_id, reply_to=message.message_id
-        ):
+        if rule.mode is Mode.PICK and not audio:
+            await _open_picker(ctx, rule, ref, user_id=user_id, chat_id=chat_id, reply_to=reply_to)
+            return
+        fmt, flow = ("audio", pipeline.audio_flow) if rule.mode is Mode.PICK else pipeline.FLOWS[rule.mode]
+        if await pipeline.send_from_cache(ctx, rule, ref, fmt, user_id=user_id, chat_id=chat_id, reply_to=reply_to):
             return
         await pipeline.enqueue(
-            ctx, rule=rule, ref=ref, fmt=fmt, user_id=user_id, chat_id=chat_id,
-            reply_to=message.message_id, flow=flow,
+            ctx, rule=rule, ref=ref, fmt=fmt, user_id=user_id, chat_id=chat_id, reply_to=reply_to, flow=flow,
         )
     except TelegramForbiddenError:
         log.info("user %s blocked the bot", user_id)
     except Exception as e:
         await ctx.alerts.error(f"link:{type(e).__name__}", "Link handling crashed", e, user=user_id)
         try:
-            await message.reply(pipeline.GENERIC_FAILURE)
+            await reply(pipeline.GENERIC_FAILURE)
         except Exception:
             pass
 
@@ -229,9 +241,10 @@ def fmt_duration(seconds: float | None) -> str | None:
     return f"{h}:{m:02}:{s:02}" if h else f"{m}:{s:02}"
 
 
-async def _open_picker(ctx: Ctx, message: Message, user_id: int, rule: SourceRule, ref: MediaRef) -> None:
-    status = await message.reply("🔎 Reading formats…")
-    chat_id = message.chat.id
+async def _open_picker(
+    ctx: Ctx, rule: SourceRule, ref: MediaRef, *, user_id: int, chat_id: int, reply_to: int
+) -> None:
+    status = await ctx.bot.send_message(chat_id, "🔎 Reading formats…", reply_parameters=pipeline.reply_params(reply_to))
     try:
         probe = await ctx.downloader.probe(rule, ref.url)
     except Exception as e:
@@ -242,7 +255,7 @@ async def _open_picker(ctx: Ctx, message: Message, user_id: int, rule: SourceRul
         return
 
     token = secrets.token_urlsafe(6)
-    picker = Picker(rule, ref, probe, user_id, chat_id, status.message_id, message.message_id)
+    picker = Picker(rule, ref, probe, user_id, chat_id, status.message_id, reply_to)
     _pickers[token] = picker
     text, markup = await _picker_view(ctx, token, picker)
     await pipeline.edit_message(ctx.bot, chat_id, status.message_id, text, markup)

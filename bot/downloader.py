@@ -714,11 +714,17 @@ class Downloader:
     async def download_post(self, rule: SourceRule, url: str, workdir: Path, progress: Progress) -> PostFiles:
         return await self._download_post(rule, url, workdir, progress, rule.egress, _deadline(self.settings.job_timeout))
 
-    async def search(self, rule: SourceRule, query: str, limit: int = 10) -> list[dict[str, Any]]:
-        """YouTube search results (flat entries: id, title, duration, channel) via the rule's egress."""
+    async def search(
+        self, rule: SourceRule, query: str, limit: int = 10, *, prefix: str = "ytsearch"
+    ) -> list[dict[str, Any]]:
+        """Search results as flat entries (id, title, duration, uploader / channel) via the rule's egress.
+
+        `prefix` is yt-dlp's search key: "ytsearch" (YouTube) or "scsearch" (SoundCloud, whose entries
+        carry the track page in `webpage_url`).
+        """
         proxy = self._proxy(rule.egress)
         args = ["--flat-playlist", "-J", "--playlist-items", f"1:{limit}"]
-        cmd = self._ytdlp_cmd(rule, proxy, None, args, f"ytsearch{limit}:{query}", playlist=True)
+        cmd = self._ytdlp_cmd(rule, proxy, None, args, f"{prefix}{limit}:{query}", playlist=True)
         async with self._probe_sem:
             with tempfile.TemporaryDirectory(prefix="search-") as tmp:
                 run = await _exec(cmd, timeout=self.settings.probe_timeout, keep_stdout=True, cwd=Path(tmp))

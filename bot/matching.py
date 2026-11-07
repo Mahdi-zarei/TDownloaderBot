@@ -95,16 +95,17 @@ def pick(meta: TrackMeta, candidates: list[_Candidate]) -> Match | None:
     return best
 
 
-def _ytm_search(query: str, proxy: str | None) -> list[dict[str, Any]]:
-    from ytmusicapi import YTMusic  # optional: plain YouTube search still works without it
+def ytm_search(query: str, proxy: str | None, limit: int = 10) -> list[dict[str, Any]]:
+    """YouTube Music song search (blocking). ytmusicapi is optional: plain YouTube search works without it."""
+    from ytmusicapi import YTMusic
 
     proxies = {"http": proxy, "https": proxy} if proxy else None
-    return YTMusic(proxies=proxies).search(query, filter="songs", limit=10)
+    return YTMusic(proxies=proxies).search(query, filter="songs", limit=limit)
 
 
 async def _ytm_candidates(meta: TrackMeta, proxy: str | None) -> list[_Candidate]:
     try:
-        results = await asyncio.wait_for(asyncio.to_thread(_ytm_search, f"{meta.artist} {meta.title}", proxy), YTM_TIMEOUT)
+        results = await asyncio.wait_for(asyncio.to_thread(ytm_search, f"{meta.artist} {meta.title}", proxy), YTM_TIMEOUT)
     except Exception as e:  # ytmusicapi breaks when YouTube Music changes; fall back quietly
         log.warning("YouTube Music search failed: %s", e)
         return []

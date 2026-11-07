@@ -17,7 +17,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError, Telegra
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefault, User
 
-from . import admin, handlers, manage, playlist, tag_editor
+from . import admin, handlers, manage, playlist, search, tag_editor
 from .alerts import Alerts
 from .config import Settings
 from .context import Ctx
@@ -33,6 +33,7 @@ log = logging.getLogger(__name__)
 USER_COMMANDS = [
     BotCommand(command="start", description="Start the bot"),
     BotCommand(command="help", description="How it works"),
+    BotCommand(command="search", description="Search YouTube Music, YouTube and SoundCloud"),
     BotCommand(command="cancel", description="Cancel your downloads"),
 ]
 ADMIN_COMMANDS = [
@@ -98,6 +99,7 @@ async def housekeeping(ctx: Ctx) -> None:
         try:
             await handlers.expire_pickers(ctx)
             await playlist.expire_sessions(ctx)
+            await search.expire_sessions(ctx)
             tag_editor.expire_sessions(ctx)
         except Exception:
             log.exception("housekeeping failed")
@@ -167,7 +169,10 @@ async def main() -> None:
         dp.message.outer_middleware(access)
         dp.callback_query.outer_middleware(access)
         dp.errors.register(handlers.on_error)
-        dp.include_routers(admin.router, manage.router, tag_editor.router, playlist.router, handlers.router)
+        # search before handlers: its text filter takes plain text, handlers' catch-all takes the rest.
+        dp.include_routers(
+            admin.router, manage.router, tag_editor.router, playlist.router, search.router, handlers.router
+        )
 
         ctx.spawn(housekeeping(ctx), name="housekeeping")
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types(), close_bot_session=False)

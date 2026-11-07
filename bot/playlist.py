@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from aiogram import Router
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.filters.callback_data import CallbackData
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
 from . import pipeline
 from .context import Ctx
@@ -83,18 +83,22 @@ def _button(s: ListSession, text: str, action: str, i: int = 0) -> InlineKeyboar
 # Picker
 
 
-async def open_list(ctx: Ctx, message: Message, user_id: int, rule: SourceRule, ref: MediaRef) -> None:
+async def open_list(
+    ctx: Ctx, rule: SourceRule, ref: MediaRef, *, user_id: int, chat_id: int, reply_to: int
+) -> None:
     assert rule.fetch_list is not None
-    status = await message.reply("🔎 Reading the track list…")
+    status = await ctx.bot.send_message(
+        chat_id, "🔎 Reading the track list…", reply_parameters=pipeline.reply_params(reply_to)
+    )
     try:
         tracks = await rule.fetch_list(ref.url)
     except Exception as e:
         await pipeline.lookup_failed(
-            ctx, rule, ref, "list", e, user_id=user_id, chat_id=message.chat.id, message_id=status.message_id,
+            ctx, rule, ref, "list", e, user_id=user_id, chat_id=chat_id, message_id=status.message_id,
             what="Reading the track list",
         )
         return
-    s = ListSession(secrets.token_urlsafe(6), tracks, user_id, message.chat.id, status.message_id, message.message_id)
+    s = ListSession(secrets.token_urlsafe(6), tracks, user_id, chat_id, status.message_id, reply_to)
     _sessions[s.token] = s
     await pipeline.edit_message(ctx.bot, s.chat_id, s.message_id, *_picker_view(s))
 
